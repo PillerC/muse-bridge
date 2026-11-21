@@ -99,7 +99,7 @@ func main() {
 
 	errCh := make(chan error, 3)
 	go func() {
-		log.Printf("管理后台监听 http://%s（建议通过 SSH 隧道访问）", cfg.Addr)
+		log.Printf("管理后台兜底监听 http://%s（公网入口见 %s/admin）", cfg.Addr, cfg.PublicURL)
 		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

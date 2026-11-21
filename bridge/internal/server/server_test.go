@@ -519,3 +519,101 @@ func TestConversationPageShowsMessages(t *testing.T) {
 		t.Fatalf("会话页应同时包含收发消息，实际: %.300s", out)
 	}
 }
+
+// 后台现在也挂在公网 443 上，必须能从 Public 直接打开登录页，
+// 且未登录访问任何 /admin 页面都要被挡回登录页。
+func TestPublicServesAdmin(t *testing.T) {
+	f := newFixture(t)
+
+	w := f.do(t, "GET", "/admin/login", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("公网 /admin/login 应 200，实际 %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "登录") {
+		t.Fatalf("登录页内容异常: %.200s", w.Body.String())
+	}
+
+	for _, path := range []string{"/admin", "/admin/export", "/admin/bridges/new"} {
+		w := f.do(t, "GET", path, "", nil)
+		if w.Code != http.StatusSeeOther {
+			t.Fatalf("公网 %s 未登录应 303，实际 %d", path, w.Code)
+		}
+		if loc := w.Header().Get("Location"); loc != "/admin/login" {
+			t.Fatalf("应跳登录页，实际 %q", loc)
+		}
+	}
+
+	// 登录后经公网入口可以正常访问。
+	form := "username=admin&password=pw"
+	req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w = httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	var cookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "mb_admin" {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("公网登录应下发会话 cookie")
+	}
+	req = httptest.NewRequest("GET", "/admin", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "总览") {
+		t.Fatalf("公网总览页异常: %d %.200s", w.Code, w.Body.String())
+	}
+}
+
+// 后台页面必须带上防点击劫持和严格 CSP：它现在对公网开放了。
+func TestAdminSecurityHeaders(t *testing.T) {
+	f := newFixture(t)
+	w := f.do(t, "GET", "/admin/login", "", nil)
+	for h, want := range map[string]string{
+		"X-Frame-Options":        "DENY",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "same-origin",
+	} {
+		if got := w.Header().Get(h); got != want {
+			t.Fatalf("%s 应为 %q，实际 %q", h, want, got)
+		}
+	}
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src") && !strings.Contains(csp, "default-src 'none'") {
+		t.Fatalf("CSP 缺失或过松: %q", csp)
+	}
+}
+
+// 限流必须按 IP 而不是 RemoteAddr 计数。
+//
+// RemoteAddr 带源端口，公网上每条新连接端口都不同——如果键用了带端口的地址，
+// 换一条连接就重置计数，暴力破解完全不受限。这里用同一 IP 不同端口连打 11 次，
+// 之后即使密码正确也必须被拒。
+func TestLoginRateLimitByIPNotPort(t *testing.T) {
+	f := newFixture(t)
+	const ip = "198.51.100.77"
+
+	try := func(port, password string) *httptest.ResponseRecorder {
+		form := "username=admin&password=" + password
+		req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = ip + ":" + port
+		w := httptest.NewRecorder()
+		f.public.ServeHTTP(w, req)
+		return w
+	}
+
+	for i := 0; i < 10; i++ {
+		w := try(fmt.Sprintf("%d", 40000+i), "wrong")
+		if strings.Contains(w.Body.String(), "尝试次数过多") {
+			t.Fatalf("第 %d 次就触发限流，阈值不对", i+1)
+		}
+	}
+
+	// 第 11 次：换端口、并且密码是对的，也必须被挡。
+	w := try("50000", "pw")
+	if !strings.Contains(w.Body.String(), "尝试次数过多") {
+		t.Fatalf("同 IP 换端口应仍受限流约束，实际: %.200s", w.Body.String())
+	}
+}

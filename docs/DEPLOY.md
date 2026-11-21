@@ -35,13 +35,21 @@ rc-service muse-bridge restart
 
 ## 访问管理后台
 
-后台只监听 `127.0.0.1:8080`，公网端口上没有后台路由。从本地建隧道：
+后台挂在公网的 `https://<域名>/admin`，直接浏览器访问并登录。
 
 ```bash
-ssh -p 22022 -L 8080:127.0.0.1:8080 root@<服务器>
+https://bridge.example.com/admin
 ```
 
-然后打开 `http://127.0.0.1:8080/admin`。账号密码在 `/etc/muse-bridge.env`。
+账号密码在 `/etc/muse-bridge.env`（`BRIDGE_ADMIN_USER` / `BRIDGE_ADMIN_PASSWORD`）。
+
+后台对公网开放的三道防线：
+
+- 会话 cookie 校验（`HttpOnly` + `Secure` + `SameSite=Lax`，12 小时过期）
+- 登录失败限流：同一 IP 5 分钟内失败 10 次即锁定，按纯 IP 计数（不是 RemoteAddr，避免换端口绕过）
+- 严格 CSP（后台页面不含任何 JS，`script-src` 等同于禁用）+ `X-Frame-Options: DENY`
+
+`127.0.0.1:8080` 的监听仍然保留，作为 TLS 异常时的兜底入口，可用 SSH 隧道访问。
 
 改密码：改 `BRIDGE_ADMIN_PASSWORD` 后 `rc-service muse-bridge restart`。
 密码以环境变量为准，重启时会同步到数据库。

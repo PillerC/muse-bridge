@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -26,7 +27,10 @@ const sessionTTL = 12 * time.Hour
 //go:embed templates/*.html
 var tplFS embed.FS
 
-// Admin 返回后台路由。这个 handler 只挂在 127.0.0.1 上。
+// Admin 返回后台路由。
+//
+// 同时挂在两个地方：127.0.0.1 的独立监听（TLS 出问题时的兜底入口）
+// 和公网 443 的 /admin 前缀下。
 func (s *Server) Admin() http.Handler {
 	mux := http.NewServeMux()
 
@@ -52,7 +56,7 @@ func (s *Server) Admin() http.Handler {
 	mux.HandleFunc("GET /admin/export", s.withAdmin(s.handleExportPage))
 	mux.HandleFunc("POST /admin/jobs/{id}/replay", s.withAdmin(s.handleReplay))
 
-	return mux
+	return securityHeaders(mux)
 }
 
 // ---------- 渲染 ----------
@@ -106,12 +110,29 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, page string, d p
 
 // ---------- 登录 ----------
 
+// loginLimiter 按来源 IP 统计失败次数。
+//
+// 键必须是纯 IP：如果直接用 r.RemoteAddr，里面带着源端口，
+// 攻击者每建一条新连接端口都不同，等于限流完全失效。
 type loginLimiter struct {
 	mu      sync.Mutex
 	attempt map[string][]time.Time
 }
 
+// maxTrackedIPs 封住 map 的无界增长：攻击者换 IP 刷时不会吃光内存。
+const maxTrackedIPs = 20000
+
 var limiter = &loginLimiter{attempt: map[string][]time.Time{}}
+
+// clientIP 从 RemoteAddr 去掉端口。本服务直接对外监听，
+// 不信任 X-Forwarded-For（没有反向代理，伪造头就能绕过限流）。
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
 
 func (l *loginLimiter) allow(ip string) bool {
 	l.mu.Lock()
@@ -123,13 +144,25 @@ func (l *loginLimiter) allow(ip string) bool {
 			keep = append(keep, t)
 		}
 	}
-	l.attempt[ip] = keep
+	if len(keep) == 0 {
+		delete(l.attempt, ip)
+	} else {
+		l.attempt[ip] = keep
+	}
 	return len(keep) < 10
 }
 
 func (l *loginLimiter) hit(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if _, ok := l.attempt[ip]; !ok && len(l.attempt) >= maxTrackedIPs {
+		// 满了就随机丢一个，够用了：这条路径只为限制暴力破解，
+		// 不做精确统计，宁可误放一次也不能让内存无上限增长。
+		for k := range l.attempt {
+			delete(l.attempt, k)
+			break
+		}
+	}
 	l.attempt[ip] = append(l.attempt[ip], time.Now())
 }
 
@@ -138,7 +171,7 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	ip := r.RemoteAddr
+	ip := clientIP(r)
 	if !limiter.allow(ip) {
 		s.render(w, r, "login.html", pageData{Title: "登录", Error: "尝试次数过多，请 5 分钟后再试"})
 		return

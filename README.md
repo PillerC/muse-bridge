@@ -10,7 +10,7 @@ Telegram ──webhook（带 secret）──► ┌─────────�
                                    │  Muse Bridge            │
 Muse ──poll/reply（Bearer 令牌）──►│  SQLite：双向聊天流水    │
                                    │  + 租约队列 + 后台       │
-浏览器 ──SSH 隧道─────────────────► └─────────────────────────┘
+浏览器 ──/admin（登录后）────────► └─────────────────────────┘
                                         │
                                         └──► api.telegram.org（桥代发）
 ```
@@ -75,11 +75,11 @@ rc-service muse-bridge start
 
 ### 2. 进后台建一座桥
 
-后台只监听 `127.0.0.1`，用 SSH 隧道访问：
+后台挂在公网 `https://<域名>/admin`，用环境变量里的账号密码登录。
 
 ```bash
-ssh -p 22022 -L 8080:127.0.0.1:8080 root@<服务器>
-# 浏览器打开 http://127.0.0.1:8080/admin
+https://bridge.example.com/admin
+# 另有一个只绑 127.0.0.1:8080 的兜底入口，TLS 出问题时可用 SSH 隧道访问
 ```
 
 填三样东西：桥名字、slug、机器人 token（@BotFather 拿）。点创建后桥会：

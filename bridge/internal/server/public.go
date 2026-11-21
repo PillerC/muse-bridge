@@ -12,7 +12,12 @@ import (
 	"muse-bridge/internal/tg"
 )
 
-// Public 返回公网路由：Telegram webhook + Muse 接入 API。
+// Public 返回公网路由：Telegram webhook + Muse 接入 API + 管理后台。
+//
+// 后台也挂在 443 上，管理员用浏览器直接打开 /admin 登录即可，
+// 不必每次开 SSH 隧道。放开的前提是后台本身有三道闸：
+// 会话 cookie 校验、登录失败限流、以及下方 securityHeaders 给的 CSP
+// 与 frame-ancestors（后台页面不含任何 JS，所以 script-src 直接禁死）。
 func (s *Server) Public() http.Handler {
 	mux := http.NewServeMux()
 
@@ -38,7 +43,34 @@ func (s *Server) Public() http.Handler {
 	// Telegram webhook：URL 里带 slug，secret 走请求头。
 	mux.HandleFunc("POST /tg/{slug}", s.handleWebhook)
 
-	return mux
+	// 后台按前缀分流到 Admin()。用前缀而不是给每个页面注册两遍，
+	// 保证 /admin 下新增页面时不需要在这里同步维护。
+	admin := s.Admin()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
+			admin.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// securityHeaders 给后台页面加上防点击劫持、防 MIME 嗅探和严格 CSP。
+//
+// 后台模板里没有任何 <script>，所以 script-src 可以设成 'none'；
+// 只有样式用了内联 style 属性，故 style-src 保留 'unsafe-inline'。
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Content-Security-Policy",
+			"default-src 'none'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; form-action 'self'; base-uri 'none'; "+
+				"frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handlePendingCount 返回可认领的消息数。
