@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -134,6 +135,21 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]map[string]any, 0, len(msgs))
+
+	// 认领即开始"输入中"：用户按下发送后立刻能看到机器人在打字，
+	// 而不是等 agent 想完才弹出一整条回复。收不到客户端只是少个提示，不影响认领。
+	if len(msgs) > 0 {
+		if client, cerr := s.svc.Client(r.Context(), b); cerr == nil {
+			deadline := now + lease
+			for _, m := range msgs {
+				chatID := m.ChatID
+				s.svc.Typing.Start(m.JobID, chatID, deadline, func(ctx context.Context) error {
+					return client.SendChatAction(ctx, chatID, "typing")
+				})
+			}
+		}
+	}
+
 	for _, m := range msgs {
 		out = append(out, map[string]any{
 			"id":                  m.JobID,
@@ -184,6 +200,8 @@ func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.svc.Queue.Ack(r.Context(), id, body.LeaseID, now); err == nil {
 			acked++
+			// 回复已送达，立刻收掉"输入中"，别让用户继续看机器人转圈。
+			s.svc.Typing.Stop(id)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked": acked})
@@ -215,6 +233,8 @@ func (s *Server) handleFail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 本轮处理到此为止：要么重排队，要么进死信，都不该继续显示"输入中"。
+	s.svc.Typing.Stop(body.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "status": res.Status, "attempts": res.Attempts, "retry_in_sec": res.RetryAfter,
 	})
@@ -246,6 +266,9 @@ func (s *Server) handleExtend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// typing 的自动停止时间要跟着租约一起往后推，否则续租之后
+	// 用户看到的是"正在输入"突然消失。
+	s.svc.Typing.Extend(body.ID, now+body.LeaseSeconds)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "lease_id": body.LeaseID, "expires_at": now + body.LeaseSeconds,
 	})
@@ -310,6 +333,11 @@ func (s *Server) handleReply(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
+	}
+	// 只发了 draft 说明还在想，继续转圈；final 才算说完。
+	// 这里不用等 ack：回复已经送到用户眼前，提示就该收。
+	if body.Mode == "" || body.Mode == "final" {
+		s.svc.Typing.Stop(body.ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "tg_message_id": res.TgMessageID, "parts": res.Parts,

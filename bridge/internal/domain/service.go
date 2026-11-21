@@ -19,6 +19,7 @@ import (
 type Service struct {
 	Store  *store.Store
 	Queue  *Queue
+	Typing *Typing
 	Box    *secret.Box
 	TG     *tg.Factory
 	Now    func() int64
@@ -27,7 +28,7 @@ type Service struct {
 
 // NewService 构造服务。
 func NewService(st *store.Store, q *Queue, box *secret.Box, f *tg.Factory, publicURL string) *Service {
-	return &Service{Store: st, Queue: q, Box: box, TG: f, Public: publicURL,
+	return &Service{Store: st, Queue: q, Typing: NewTyping(), Box: box, TG: f, Public: publicURL,
 		Now: func() int64 { return time.Now().Unix() }}
 }
 
@@ -146,15 +147,19 @@ func (s *Service) SendReply(ctx context.Context, b *store.Bridge, jobID int64, l
 	if strings.TrimSpace(text) == "" {
 		text = "…"
 	}
+	// Telegram 的老式 Markdown 只认单个 * 表示加粗，模型却习惯输出 **粗体**。
+	// 不归一化的话 * 会被当成一对空实体吞掉，结果是文字不加粗、也不报错。
+	if parseMode == "Markdown" {
+		text = normalizeLegacyMarkdown(text)
+	}
 
 	client, err := s.Client(ctx, b)
 	if err != nil {
 		return nil, err
 	}
 
-	// typing 保活：只要还在处理就每 4.5 秒发一次，Telegram 的 typing 状态 5 秒过期。
-	stop := startTyping(ctx, client, job.ChatID)
-	defer stop()
+	// 这里的 typing 由 Typing 管理器负责（认领时启动、final/ack 时停止），
+	// 不再在发送过程中另开一个循环，否则同一任务会有两个保活互相叠加。
 
 	limit := 3800
 	parts := splitText(text, limit)
@@ -232,25 +237,6 @@ func (s *Service) SendReply(ctx context.Context, b *store.Bridge, jobID int64, l
 		}
 	}
 	return res, nil
-}
-
-// startTyping 启动 typing 保活，返回停止函数。
-func startTyping(ctx context.Context, client *tg.Client, chatID int64) func() {
-	ctx, cancel := context.WithCancel(ctx)
-	go func() {
-		ticker := time.NewTicker(4500 * time.Millisecond)
-		defer ticker.Stop()
-		_ = client.SendChatAction(ctx, chatID, "typing")
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				_ = client.SendChatAction(ctx, chatID, "typing")
-			}
-		}
-	}()
-	return cancel
 }
 
 // callWithRetry 处理 429：按 Telegram 的 retry_after 等待后重试，最多 3 次。
@@ -438,4 +424,35 @@ func mediaJSON(m *tg.Message) string {
 	}
 	b, _ := json.Marshal(payload)
 	return string(b)
+}
+
+// normalizeLegacyMarkdown 把标准 Markdown 的强调写法压成 Telegram 老式 Markdown。
+//
+// 老式 Markdown（parse_mode=Markdown）里 * 是加粗、_ 是斜体，都是单字符定界。
+// 模型输出的是 **粗体**、__强调__，在老式解析器眼里就成了两个空实体，
+// 星号被吞掉、文字也不加粗——线上实测就是这样。
+//
+// 只压连续的 * 和 _，不动其它字符；MarkdownV2 本来就是 ** 语义，不经过这里。
+func normalizeLegacyMarkdown(s string) string {
+	if !strings.ContainsAny(s, "*_") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c != '*' && c != '_' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		j := i
+		for j < len(s) && s[j] == c {
+			j++
+		}
+		// 一串连续的定界符压成一个：***x*** 与 **x** 都变成 *x*。
+		b.WriteByte(c)
+		i = j
+	}
+	return b.String()
 }

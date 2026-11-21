@@ -32,6 +32,19 @@ type fakeTG struct {
 	editLog []string
 }
 
+// count 返回某个方法被调用的次数，用来断言 typing 之类的副作用。
+func (f *fakeTG) count(method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c == method {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *fakeTG) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -681,4 +694,30 @@ func TestTemplatesHaveNoInlineScript(t *testing.T) {
 				e.Name(), loc[0], string(data[max(0, loc[0]-40):loc[0]+60]))
 		}
 	}
+}
+
+// 消息被认领的那一刻就要开始在 Telegram 显示"输入中"，
+// 而不是等 agent 想完、调 /reply 的时候才发——那时候回复都已经发出去了。
+func TestPollStartsTypingImmediately(t *testing.T) {
+	f := newFixture(t)
+	_ = f.do(t, "POST", "/tg/demo", sampleUpdate,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"})
+
+	if got := f.tg.count("sendChatAction"); got != 0 {
+		t.Fatalf("还没认领就不该发 typing，实际 %d 次", got)
+	}
+
+	w := f.do(t, "GET", "/poll", "", f.auth())
+	if w.Code != 200 {
+		t.Fatalf("认领失败: %d %s", w.Code, w.Body)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.tg.count("sendChatAction") >= 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("认领后应立即发送 sendChatAction(typing)")
 }

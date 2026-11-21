@@ -60,7 +60,12 @@ python3 .../muse-bridge.py poll --limit 5 --lease-seconds 180
 python3 .../muse-bridge.py reply --id <id> --lease-id <lease_id> --text-file /tmp/reply.txt
 ```
 
-- 桥会自动完成：typing 保活、4096 字符分段、429 退避、Markdown 解析失败时回退纯文本、写做出站记录、**自动 ack**。发完不用再调 `ack`。
+- 桥会自动完成：4096 字符分段、429 退避、Markdown 解析失败时回退纯文本、写做出站记录、**自动 ack**。发完不用再调 `ack`。
+
+**「输入中」是桥自己管的，Muse 不用做任何事。** 消息被 `/poll` 认领的那一刻，
+桥就开始每 4.5 秒给 Telegram 发一次 `sendChatAction(typing)`，直到你调 `/reply` 传 `mode=final`
+（或 `/ack`、`/fail`）为止；租约到期也会自动停。所以即使 agent 要想两分钟，
+用户在 Telegram 里看到的也是持续的「正在输入…」，而不是一片安静。
 - 需要"思考中…"占位时先发一次 `--mode draft`，再发 `--mode final` 覆盖同一条消息。
 
 4. 只有在你确实没能完成回复时才调用 `fail`：

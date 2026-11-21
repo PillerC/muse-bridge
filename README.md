@@ -26,7 +26,7 @@ Muse ──poll/reply（Bearer 令牌）──►│  SQLite：双向聊天流�
 v1 让 Muse 直连 `api.telegram.org`，省了一次转发。代价是出站消息没有记录，
 而且 bot token 必须放在 Muse 侧。现在为了让"完整聊天记录"成立，出站必须经过桥。
 
-桥把原来压在 prompt 里的活接了过来：typing 保活、4096 字符分段、429 退避、
+桥把原来压在 prompt 里的活接了过来：认领即显示「输入中」、4096 字符分段、429 退避、
 Markdown 解析失败回退纯文本、写入库、自动 ack。Muse 只需要产出一段文本。
 
 ## 快速开始

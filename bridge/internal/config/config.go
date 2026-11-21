@@ -41,6 +41,8 @@ type Config struct {
 	MaxAttempts int
 	// TGProxy 是访问 api.telegram.org 的 HTTP 代理，可留空。
 	TGProxy string
+	// Typing 控制认领后是否在 Telegram 显示"输入中"。默认开。
+	Typing bool
 }
 
 // DBPath 返回 SQLite 文件路径。
@@ -75,6 +77,7 @@ func Load() (*Config, error) {
 		LeaseSeconds:  180,
 		MaxAttempts:   5,
 		TGProxy:       env("BRIDGE_TG_PROXY", ""),
+		Typing:        env("BRIDGE_TYPING", "1") != "0",
 	}
 
 	secretRaw := os.Getenv("BRIDGE_SECRET")

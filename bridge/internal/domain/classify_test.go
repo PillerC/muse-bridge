@@ -132,3 +132,22 @@ func TestContentPhoto(t *testing.T) {
 		t.Fatal("图片消息必须给出可读描述，否则 agent 只会看到空文本")
 	}
 }
+
+func TestNormalizeLegacyMarkdown(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// 模型最常输出的写法：双星号加粗，老式 Markdown 不认。
+		{"这是 **重点** 内容", "这是 *重点* 内容"},
+		{"__强调__ 和 _斜体_", "_强调_ 和 _斜体_"},
+		{"***粗斜***", "*粗斜*"},
+		{"没有格式的普通文字", "没有格式的普通文字"},
+		{"单个 * 不动", "单个 * 不动"},
+		{"代码 `a**b` 里的星号也会被压平", "代码 `a*b` 里的星号也会被压平"},
+		{"多行\n**第一行**\n**第二行**", "多行\n*第一行*\n*第二行*"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := normalizeLegacyMarkdown(c.in); got != c.want {
+			t.Fatalf("normalizeLegacyMarkdown(%q) = %q，期望 %q", c.in, got, c.want)
+		}
+	}
+}

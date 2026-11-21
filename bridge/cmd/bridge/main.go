@@ -60,6 +60,7 @@ func main() {
 	}
 	queue := domain.NewQueue(st, cfg.LeaseSeconds, cfg.MaxAttempts)
 	svc := domain.NewService(st, queue, box, factory, cfg.PublicURL)
+	svc.Typing.Enabled = cfg.Typing
 	srv := server.New(cfg, svc, st)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -162,5 +163,7 @@ func main() {
 	defer cancel()
 	_ = adminSrv.Shutdown(shutdownCtx)
 	_ = publicSrv.Shutdown(shutdownCtx)
+	// 停掉所有"输入中"保活，否则进程走了 Telegram 那边还在转圈。
+	svc.Typing.StopAll()
 	os.Exit(0)
 }
