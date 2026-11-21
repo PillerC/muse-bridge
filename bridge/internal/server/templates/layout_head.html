@@ -61,7 +61,7 @@
       word-break:break-all;font-family:var(--mono);font-size:13px}
     /* 一键复制那两块：标题和按钮同一行，内容是只读的等宽块。
        提示词要能看清换行，用 textarea 而不是 div——它也天生可全选。 */
-    .copyhead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:18px 0 7px}
+    .copyhead{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:18px 0 7px}
     .copyhead.first{margin-top:0}
     .copyhead .lbl{margin:0;font-size:13px;color:var(--muted)}
     textarea.copybox{width:100%;min-height:230px;padding:11px 12px;border:1px solid var(--line);
@@ -80,6 +80,9 @@
     .btn.primary:hover{filter:brightness(.95)}
     .btn.danger{color:var(--err);border-color:#f3c7c7}
     .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    /* 设置卡底部的操作区：和上面的表单分开一层，
+       暂停、删除并排放，删除永远挨着暂停而不是孤零零挂在页尾。 */
+    .danger-zone{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
     .msg{padding:10px 14px;border-radius:9px;margin-bottom:16px;font-size:14px}
     .msg.ok{background:var(--ok-bg);color:var(--ok)}
     .msg.err{background:var(--err-bg);color:var(--err)}
@@ -141,10 +144,6 @@
          真按 16px 排，一段说明能占满两屏。 */
       textarea.copybox{font-size:12px;min-height:210px}
       .copyhead{margin:16px 0 6px}
-
-      /* 列多的表在手机上先藏次要列：令牌表去掉「最近使用」。
-         剩下的列才站得住；还挤就靠 .tw 横向滚动。 */
-      .t-tokens th:nth-child(3),.t-tokens td:nth-child(3){display:none}
     }
   </style>
 </head>

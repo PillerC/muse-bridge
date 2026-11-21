@@ -59,9 +59,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /bridges/{id}", s.withAdmin(s.handleBridgeDetail))
 	mux.HandleFunc("POST /bridges/{id}/settings", s.withAdmin(s.handleBridgeSettings))
 	mux.HandleFunc("POST /bridges/{id}/status", s.withAdmin(s.handleBridgeStatus))
-	mux.HandleFunc("POST /bridges/{id}/tokens", s.withAdmin(s.handleNewToken))
-	mux.HandleFunc("POST /bridges/{id}/tokens/{tid}/revoke", s.withAdmin(s.handleRevokeToken))
-	mux.HandleFunc("POST /bridges/{id}/webhook", s.withAdmin(s.handleWebhookAdmin))
+	mux.HandleFunc("POST /bridges/{id}/tokens/rotate", s.withAdmin(s.handleRotateToken))
 	mux.HandleFunc("GET /bridges/{id}/webhook-status", s.withAdmin(s.handleWebhookStatus))
 	mux.HandleFunc("POST /bridges/{id}/delete", s.withAdmin(s.handleDeleteBridge))
 	mux.HandleFunc("GET /bridges/{id}/delete", s.withAdmin(s.handleDeleteConfirm))
@@ -379,8 +377,6 @@ type bridgeDetailData struct {
 	Tokens        []*store.Token
 	Conversations []*store.Conversation
 	DeadJobs      []*store.DeadJob
-	BaseURL       string
-	WebhookURL    string
 	Blocked       *domain.BlockedNotice
 
 	// 接入 Muse 的两段可复制文本。
@@ -390,8 +386,7 @@ type bridgeDetailData struct {
 	// 分成两个按钮，用户想什么时候发、发给谁都能自己控制。
 	Prompt      string
 	Token       string // 当前有效令牌的明文；没有可用令牌时为空
-	TokenID     int64
-	TokenLegacy bool // 有有效令牌，但签发于"存密文"之前，复制不出来
+	TokenLegacy bool   // 有有效令牌，但签发于"存密文"之前，复制不出来
 	JustCreated bool
 }
 
@@ -415,10 +410,6 @@ func (s *Server) renderBridge(w http.ResponseWriter, r *http.Request, b *store.B
 	if base == "" {
 		base = "http://" + s.cfg.Addr
 	}
-	wh := ""
-	if s.cfg.PublicURL != "" {
-		wh = s.cfg.PublicURL + "/tg/" + b.Slug
-	}
 	// 最近一条被白名单拦下的消息只活在内存里，重启后没有就没有了。
 	// 它对"填错 ID 所以毫无反应"这种情形是唯一的可见线索。
 	var blocked *domain.BlockedNotice
@@ -427,14 +418,12 @@ func (s *Server) renderBridge(w http.ResponseWriter, r *http.Request, b *store.B
 	}
 
 	// 令牌按签发顺序倒序，取最新一枚还有效的。
-	var tokID int64
 	legacy := false
 	tokPlain := ""
 	for _, t := range tokens {
 		if t.RevokedAt != 0 {
 			continue
 		}
-		tokID = t.ID
 		if t.TokenEnc == "" {
 			legacy = true
 			break
@@ -452,43 +441,45 @@ func (s *Server) renderBridge(w http.ResponseWriter, r *http.Request, b *store.B
 		Title: b.Name, Active: "dashboard", Admin: true,
 		Data: bridgeDetailData{
 			Bridge: b, Tokens: tokens, Conversations: convs, DeadJobs: dead,
-			BaseURL: base, WebhookURL: wh, Blocked: blocked,
-			Prompt: onboardPrompt(b, base), Token: tokPlain,
-			TokenID: tokID, TokenLegacy: legacy, JustCreated: justCreated,
+			Blocked: blocked,
+			Prompt:  onboardPrompt(base), Token: tokPlain,
+			TokenLegacy: legacy, JustCreated: justCreated,
 		},
 	})
 }
 
 // onboardPrompt 生成"发给 Muse"的接入说明。
 //
-// 里面只放地址、桥标识和调用节奏，不放令牌。这份文本是要被整段
-// 复制到别处的，任何凭据都不该跟着走。
-func onboardPrompt(b *store.Bridge, base string) string {
-	var sb strings.Builder
-	sb.WriteString("请接入一座 Telegram ↔ Muse 的桥，用 custom.muse-bridge connector。\n\n")
-	fmt.Fprintf(&sb, "桥地址（BASE）：%s\n", base)
-	fmt.Fprintf(&sb, "桥标识：%s\n", b.Slug)
-	if b.BotUsername != "" {
-		fmt.Fprintf(&sb, "对应机器人：@%s\n", b.BotUsername)
-	}
-	sb.WriteString(`
+// 里面只放地址和调用节奏，不放令牌：这份文本是要被整段复制到别处的，
+// 任何凭据都不该跟着走。文案是用户定稿的，要改先对齐，别自行增删。
+func onboardPrompt(base string) string {
+	return `桥地址：` + base + `
+
+这是一座 Muse Bridge：Telegram Bot 的消息队列。用户在 Telegram 里给机器人发消息，消息会进这座桥的队列；你认领、回复，桥负责把回复发回 Telegram。
+
 接入步骤：
-1. 把 connector 的 base_url 设成上面的桥地址，api_hosts 用这个域名；
-2. 令牌我另外单独发给你。收到后按 bearer_header 方式带上，不要写进文档、脚本、命令行参数或日志；
-3. 不要向我要机器人 token —— 它在桥里，Muse 不需要也不该拿到；
-4. 接好后先跑一次 muse-bridge.py stats 确认连通，再开始收消息。
+1. 注册 connector：api_key，bearer_header，api_hosts 用上面的桥地址；
+2. 令牌我另外单独发给你 —— 通过 Muse 的安全录入页面提交，不要让我粘贴在聊天里。收到后按 bearer_header 方式带上，不要写进文档、脚本、命令行参数或日志；
+3. 不要向我要机器人 token —— 它在桥里，Muse 不需要也不该拿到；也不要自己调 Telegram Bot API 发消息，一切发送都走桥的 reply；
+4. 写一个 helper（命名为 muse-bridge.py），实现下面的接口；写好后先跑一次 stats 确认连通，再开始收消息。如果超时，重试一次再判断。
+
+接口（除 pending-count 外都要带 Bearer 令牌；返回都是 JSON，成功时 ok 为 true）：
+- GET /pending-count（公开，不用令牌）→ {"ok":true,"pending":N}，N 是待处理消息数；
+- GET /poll?limit=5&lease_seconds=180 → 认领待处理消息。每条任务有 job_id、lease_id、lease_seconds，以及消息文本、发送者、chat_id 等字段；lease_seconds 要够覆盖你的思考时间，默认 180 秒；
+- POST /reply {"job_id":1,"lease_id":"...","text":"..."} → 发出回复。桥会自动分段、退避重试并 ack，发完不用再调 ack；
+- POST /ack {"ids":[1],"lease_id":"..."} → 不回复，直接完成（确实不需要回复的消息用它）；
+- POST /fail {"id":1,"lease_id":"...","error":"..."} → 没能完成，让桥稍后重投；超过上限进死信，后台可重放；
+- POST /extend {"id":1,"lease_id":"...","lease_seconds":180} → 续租；
+- GET /stats → 队列状态（各状态计数和最近的死信）。
 
 每条消息的节奏：
-- pending-count 看有没有待处理消息，为 0 就结束这一轮，不要回复任何东西；
-- 有消息就 poll 认领（带上够覆盖你思考时间的 lease_seconds）；
-- 想好后用 reply 发出，桥会自动分段、退避重试并 ack，发完不用再调 ack；
-- 真的没能完成才调 fail，桥会按退避重投，超过上限进死信、后台可重放；
+- pending-count 为 0 就结束这一轮，不要回复任何东西。这个端点是公开的，适合高频轮询；
+- 有消息就 poll 认领；poll 返回空说明已被别的 agent 认领或队列已空，直接结束；
+- 想好后用 reply 发出；
 - 长任务在租约过半时 extend 续租。
 
 「正在输入…」由桥负责：消息被认领的那一刻起就持续给 Telegram 发 typing，
-直到 reply / ack / fail 或租约到期。你不需要发 sendChatAction。
-`)
-	return sb.String()
+直到 reply / ack / fail 或租约到期。你不需要发 sendChatAction。`
 }
 
 func (s *Server) handleBridgeSettings(w http.ResponseWriter, r *http.Request) {
@@ -544,7 +535,11 @@ func (s *Server) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
-func (s *Server) handleNewToken(w http.ResponseWriter, r *http.Request) {
+// handleRotateToken 换一枚新令牌，并把旧的全部作废。
+//
+// 顺序是"先发新的、再废旧的"：中间不留零令牌的瞬间。
+// Muse 可能正在轮询，先废后发会让它吃到 401 然后停下来等人。
+func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if _, err := s.st.GetBridgeByID(r.Context(), id); err != nil {
 		http.NotFound(w, r)
@@ -557,48 +552,26 @@ func (s *Server) handleNewToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.svc.Now()
-	if _, err := s.st.CreateToken(r.Context(), id, "手动签发", secret.HashToken(token), secret.TokenPrefix(token), enc, now); err != nil {
-		s.flashToBridge(w, r, id, "签发失败："+err.Error())
-		return
-	}
-	setFlash(w, "ok", "已签发新令牌。旧令牌仍然有效，要停用请点它那一行的「吊销」。")
-	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
-}
-
-func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	tid, _ := strconv.ParseInt(r.PathValue("tid"), 10, 64)
-	_ = s.st.RevokeToken(r.Context(), id, tid, s.svc.Now())
-	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
-}
-
-func (s *Server) handleWebhookAdmin(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	b, err := s.st.GetBridgeByID(r.Context(), id)
+	newID, err := s.st.CreateToken(r.Context(), id, "轮转",
+		secret.HashToken(token), secret.TokenPrefix(token), enc, now)
 	if err != nil {
-		http.NotFound(w, r)
+		s.flashToBridge(w, r, id, "轮转失败："+err.Error())
 		return
 	}
-	_ = r.ParseForm()
-	client, err := s.svc.Client(r.Context(), b)
-	if err != nil {
-		s.flashToBridge(w, r, id, "无法解密 token："+err.Error())
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-	defer cancel()
-	if r.PostFormValue("action") == "delete" {
-		err = client.DeleteWebhook(ctx)
-	} else {
-		if s.cfg.PublicURL == "" {
-			s.flashToBridge(w, r, id, "未配置 BRIDGE_PUBLIC_URL，无法注册 webhook")
-			return
+	tokens, _ := s.st.ListTokens(r.Context(), id)
+	revoked := 0
+	for _, t := range tokens {
+		if t.ID == newID || t.RevokedAt != 0 {
+			continue
 		}
-		err = client.SetWebhook(ctx, s.cfg.PublicURL+"/tg/"+b.Slug, b.WebhookSecret)
+		if err := s.st.RevokeToken(r.Context(), id, t.ID, now); err == nil {
+			revoked++
+		}
 	}
-	if err != nil {
-		s.flashToBridge(w, r, id, "操作失败："+err.Error())
-		return
+	if revoked > 0 {
+		setFlash(w, "ok", fmt.Sprintf("已轮转：新令牌生效，%d 枚旧令牌作废。把新令牌发给 Muse。", revoked))
+	} else {
+		setFlash(w, "ok", "已签发令牌。点「复制令牌」把它发给 Muse。")
 	}
 	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }

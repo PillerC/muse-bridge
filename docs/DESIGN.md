@@ -208,8 +208,7 @@ Idempotency-Key: 42-a1b2c3          // 必填，重复提交返回上次结果
 | GET | `/api/bridges` | 桥列表（含机器人用户名、待办数、今日消息数） |
 | POST | `/api/bridges` | 建桥，入参 `{name, bot_token}` |
 | PATCH | `/api/bridges/:id` | 改名、启停、允许的用户 ID |
-| POST | `/api/bridges/:id/tokens` | 签发新令牌，明文加密落库，后台随时可再复制 |
-| DELETE | `/api/bridges/:id/tokens/:tid` | 吊销令牌 |
+| POST | `/api/bridges/:id/tokens/rotate` | 轮转令牌：先签发新的（明文加密落库），再作废旧的 |
 | GET | `/api/bridges/:id/conversations` | 会话列表 |
 | GET | `/api/conversations/:id/messages` | 消息分页（游标 `before_id`） |
 | GET | `/api/bridges/:id/messages` | 跨会话搜索（关键字 + 时间范围） |

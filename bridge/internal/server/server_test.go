@@ -484,7 +484,7 @@ func TestAdminPagesRender(t *testing.T) {
 	pages := map[string]string{
 		"/":            "总览",
 		"/bridges/new": "新建桥",
-		"/bridges/1":   "接入信息",
+		"/bridges/1":   "接入 Muse",
 		"/export":      "导出聊天记录",
 	}
 	for path, marker := range pages {
@@ -693,7 +693,7 @@ func TestDeleteConfirmPageRenders(t *testing.T) {
 		t.Fatalf("确认页应 200，实际 %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "确认永久删除") || !strings.Contains(body, "不可恢复") {
+	if !strings.Contains(body, "确认删除") || !strings.Contains(body, "不可恢复") {
 		t.Fatalf("确认页内容异常: %.300s", body)
 	}
 	if strings.Contains(body, "onsubmit") {
@@ -938,7 +938,11 @@ func TestOnboardPromptHasURLAndNoToken(t *testing.T) {
 		t.Fatalf("详情页应有一段可复制的提示词: %.300s", w.Body.String())
 	}
 	prompt := m[1]
-	for _, want := range []string{"https://bridge.test", "demo", "@musebot", "pending-count", "poll"} {
+	// 提示词是用户定稿的那一份：要能独立转发，所以地址在、凭据不在。
+	for _, want := range []string{
+		"https://bridge.test", "api_hosts", "bearer_header",
+		"/pending-count", "/poll?limit=5", "/reply", "/stats", "muse-bridge.py",
+	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("提示词应包含 %q，实际:\n%s", want, prompt)
 		}
@@ -951,25 +955,79 @@ func TestOnboardPromptHasURLAndNoToken(t *testing.T) {
 	}
 }
 
-// 签发新令牌走 303 回到详情页，并且密文要落库，否则下次又复制不出来。
-func TestIssueNewTokenStoresCipherAndRedirects(t *testing.T) {
+// 轮转令牌：发新的、废旧的，顺序不能反——中间不能有一刻是零令牌，
+// 否则正在轮询的 Muse 会吃到 401 然后停下。
+func TestRotateTokenReplacesOld(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest("POST", "/bridges/1/tokens", nil)
+	req := httptest.NewRequest("POST", "/bridges/1/tokens/rotate", nil)
 	req.AddCookie(f.adminCookie(t))
 	w := httptest.NewRecorder()
 	f.public.ServeHTTP(w, req)
 	if w.Code != http.StatusSeeOther {
-		t.Fatalf("签发后应 303，实际 %d", w.Code)
+		t.Fatalf("轮转后应 303，实际 %d", w.Code)
 	}
 	tokens, err := f.st.ListTokens(t.Context(), f.bridge.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(tokens) != 2 {
-		t.Fatalf("应有 2 枚令牌，实际 %d", len(tokens))
+		t.Fatalf("应有 2 枚令牌（新旧各一），实际 %d", len(tokens))
 	}
-	if tokens[0].TokenEnc == "" {
+	fresh, old := tokens[0], tokens[1]
+	if fresh.TokenEnc == "" {
 		t.Fatal("新令牌必须存密文，否则下次打开又只有前缀")
+	}
+	if fresh.RevokedAt != 0 {
+		t.Fatal("新令牌不该是已吊销状态")
+	}
+	if old.RevokedAt == 0 {
+		t.Fatal("轮转必须把旧令牌作废")
+	}
+
+	box, _ := secret.NewBox(bytes.Repeat([]byte{1}, 32))
+	plain, err := box.Open(fresh.TokenEnc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain == "mb_test_token" {
+		t.Fatal("轮转不能只是把旧令牌原样复制一份")
+	}
+	if w := f.do(t, "GET", "/stats", "", map[string]string{"Authorization": "Bearer " + plain}); w.Code != http.StatusOK {
+		t.Fatalf("新令牌应可用，实际 %d: %s", w.Code, w.Body)
+	}
+	if w := f.do(t, "GET", "/stats", "", map[string]string{"Authorization": "Bearer mb_test_token"}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("旧令牌应立刻失效（401），实际 %d", w.Code)
+	}
+}
+
+// 详情页的版式是用户定的：删掉「接入信息」「令牌」表、「删除桥」卡，
+// 暂停和删除并排放进最底部的设置卡，令牌那块只留「复制令牌 + 轮转令牌」。
+func TestBridgeDetailLayout(t *testing.T) {
+	f := newFixture(t)
+	req := httptest.NewRequest("GET", "/bridges/1", nil)
+	req.AddCookie(f.adminCookie(t))
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	body := w.Body.String()
+
+	for _, gone := range []string{"接入信息", "重新注册 webhook", "断开 webhook", "永久删除", "暂停这座桥", "<h2>令牌</h2>"} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("详情页不该再出现 %q", gone)
+		}
+	}
+	for _, want := range []string{"轮转令牌", "复制令牌", ">暂停<", ">删除<", "设置"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("详情页应包含 %q", want)
+		}
+	}
+	// 设置卡在最底部：会话、死信之后；暂停与删除在同一行里，删除紧跟暂停。
+	if strings.Index(body, "设置") < strings.Index(body, "<h2>会话</h2>") {
+		t.Fatal("设置卡应在会话之后（最底部）")
+	}
+	pause := strings.Index(body, ">暂停<")
+	del := strings.Index(body, ">删除<")
+	if pause < 0 || del < 0 || del < pause || del-pause > 400 {
+		t.Fatalf("删除应紧挨着暂停，实际位置 pause=%d delete=%d", pause, del)
 	}
 }
 

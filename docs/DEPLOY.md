@@ -91,7 +91,7 @@ curl "https://api.telegram.org/bot<token>/getWebhookInfo"
 看 `last_error_message`。常见原因：
 
 - `SSL error` / `Connection refused`：443 不通，或证书没签下来。检查安全组和 `certs/` 目录。
-- `Wrong response from the webhook: 403`：`webhook_secret` 不匹配。在后台点「重新注册 webhook」。
+- `Wrong response from the webhook: 403`：`webhook_secret` 不匹配。在桥详情里把「接收方式」切到长轮询保存一次、再切回 webhook，桥会重新注册。
 - `409 Conflict`：还挂着旧 webhook，或同时开了长轮询。后台切一次模式即可同步。
 
 **证书申请失败**
@@ -103,7 +103,7 @@ curl "https://api.telegram.org/bot<token>/getWebhookInfo"
 
 1. `curl https://<域名>/pending-count` 看数字；
 2. 数字大于 0 但 Muse 不动 → 检查 hook 是否在跑、`MUSE_BRIDGE_URL` 是否写对；
-3. Muse 报 401 → 令牌被吊销或写错，后台重新签发；
+3. Muse 报 401 → 令牌被轮转或写错，在桥详情点「轮转令牌」把新的发给 Muse；
 4. Muse 报 409 → 租约过期，说明它处理太慢，把 `--lease-seconds` 调大或加 `extend`。
 
 **死信堆积**

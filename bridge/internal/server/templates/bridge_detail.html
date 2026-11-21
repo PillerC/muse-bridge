@@ -48,103 +48,25 @@
     <p class="lbl">② 桥令牌
       {{if .Data.TokenLegacy}}<span class="pill mute">旧令牌无法显示</span>{{end}}
     </p>
-    {{if .Data.Token}}<button type="button" class="btn copybtn" data-copy="token">复制令牌</button>{{end}}
+    <div class="row" style="gap:8px">
+      {{if .Data.Token}}<button type="button" class="btn copybtn" data-copy="token">复制令牌</button>{{end}}
+      <form method="post" action="/bridges/{{.Data.Bridge.ID}}/tokens/rotate" style="margin:0">
+        <button class="btn copybtn">轮转令牌</button>
+      </form>
+    </div>
   </div>
 
   {{if .Data.Token}}
   <div class="token" id="token">{{.Data.Token}}</div>
   <p class="sub" style="margin:8px 0 0">
-    令牌在这页随时能再复制一次，不用重新签发。怀疑泄露就签发新的，再把旧的吊销。
+    令牌在这页随时能再复制一次。怀疑泄露就点「轮转令牌」：新令牌立刻生效，
+    旧的全部作废，Muse 那边换上新的就能继续收。
   </p>
   {{else if .Data.TokenLegacy}}
-  <div class="token" style="color:var(--muted)">这枚令牌签发得比「随时可复制」早，当时只存了摘要，明文已经找不回来。</div>
-  <form method="post" action="/bridges/{{.Data.Bridge.ID}}/tokens" style="margin-top:10px">
-    <button class="btn primary">签发一枚可复制的令牌</button>
-  </form>
+  <div class="token" style="color:var(--muted)">这枚令牌签发得比「随时可复制」早，当时只存了摘要，明文已经找不回来。点「轮转令牌」换一枚新的。</div>
   {{else}}
-  <div class="empty" style="padding:8px 0">还没有有效令牌，Muse 现在无法接入。</div>
-  <form method="post" action="/bridges/{{.Data.Bridge.ID}}/tokens">
-    <button class="btn primary">签发令牌</button>
-  </form>
+  <div class="empty" style="padding:8px 0">还没有令牌，Muse 现在无法接入。点「轮转令牌」生成一枚。</div>
   {{end}}
-</div>
-
-<div class="split">
-  <div class="card">
-    <h2>接入信息</h2>
-    <label>接入地址</label>
-    <div class="token">{{.Data.BaseURL}}</div>
-    <p class="sub" style="margin:10px 0 0">Muse 用 <code>Authorization: Bearer &lt;令牌&gt;</code> 调用
-      <code>/poll</code>、<code>/reply</code>、<code>/ack</code>。</p>
-
-    {{if .Data.WebhookURL}}
-    <label style="margin-top:18px">Telegram webhook</label>
-    <div class="token">{{.Data.WebhookURL}}</div>
-    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/webhook" style="margin-top:10px">
-      <button class="btn" name="action" value="set">重新注册 webhook</button>
-      <button class="btn" name="action" value="delete">断开 webhook</button>
-    </form>
-    {{end}}
-  </div>
-
-  <div class="card">
-    <h2>设置</h2>
-    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/settings">
-      <label>名字</label>
-      <input type="text" name="name" value="{{.Data.Bridge.Name}}" required>
-      <label>允许的 Telegram 用户 ID</label>
-      <input type="text" name="allowed_user_ids" value="{{.Data.Bridge.AllowedUserIDs}}" inputmode="numeric">
-      <p class="sub" style="margin:6px 0 0">
-        只有这些 ID 发来的消息才会被接收，其他人发的直接丢弃。
-        留空保存相当于重新认领：下一个给机器人发消息的人会被自动绑定。
-        多个 ID 用逗号隔开，可私聊 <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a> 查自己的。
-      </p>
-      <label>接收 Telegram 更新的方式</label>
-      <select name="mode">
-        <option value="webhook" {{if eq .Data.Bridge.Mode "webhook"}}selected{{end}}>webhook（Telegram 推送）</option>
-        <option value="poll" {{if eq .Data.Bridge.Mode "poll"}}selected{{end}}>长轮询（桥主动拉取）</option>
-      </select>
-      <p class="sub" style="margin:6px 0 0">只影响桥怎么从 Telegram 取消息，Muse 侧始终是 <code>/poll</code> 拉取。</p>
-      <div class="row" style="margin-top:16px"><button class="btn primary">保存</button></div>
-    </form>
-    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/status" style="margin-top:10px">
-      {{if eq .Data.Bridge.Status "active"}}
-      <button class="btn" name="status" value="paused">暂停这座桥</button>
-      {{else}}
-      <button class="btn primary" name="status" value="active">恢复运行</button>
-      {{end}}
-    </form>
-  </div>
-</div>
-
-<div class="card">
-  <div class="row" style="justify-content:space-between;margin-bottom:10px">
-    <h2 style="margin:0">令牌</h2>
-    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/tokens" style="margin:0">
-      <button class="btn">签发新令牌</button>
-    </form>
-  </div>
-  {{if .Data.Tokens}}
-  <div class="tw">
-  <table class="t-tokens">
-    <thead><tr><th>标签</th><th>前缀</th><th>最近使用</th><th>状态</th><th></th></tr></thead>
-    <tbody>
-    {{range .Data.Tokens}}
-      <tr>
-        <td>{{if .Label}}{{.Label}}{{else}}<span style="color:var(--muted)">默认</span>{{end}}</td>
-        <td class="mono">{{.TokenPrefix}}…</td>
-        <td>{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}<span style="color:var(--muted)">从未</span>{{end}}</td>
-        <td>{{if .RevokedAt}}<span class="pill mute">已吊销</span>{{else}}<span class="pill ok">有效</span>{{end}}</td>
-        <td>{{if not .RevokedAt}}
-          <form method="post" action="/bridges/{{$.Data.Bridge.ID}}/tokens/{{.ID}}/revoke" style="margin:0">
-            <button class="btn danger">吊销</button>
-          </form>{{end}}</td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-  </div>
-  {{else}}<div class="empty">还没有令牌。</div>{{end}}
 </div>
 
 <div class="card">
@@ -186,9 +108,37 @@
 </div>
 {{end}}
 
-<div class="card" style="border-color:#f3c7c7">
-  <h2 style="color:var(--err)">删除桥</h2>
-  <p class="sub">会连同该桥的全部会话、消息、令牌一起删除，不可恢复。只是想停用的话用上面的「暂停」。</p>
-  <a class="btn danger" href="/bridges/{{.Data.Bridge.ID}}/delete">永久删除</a>
+<div class="card">
+  <h2>设置</h2>
+  <form method="post" action="/bridges/{{.Data.Bridge.ID}}/settings">
+    <label>名字</label>
+    <input type="text" name="name" value="{{.Data.Bridge.Name}}" required>
+    <label>允许的 Telegram 用户 ID</label>
+    <input type="text" name="allowed_user_ids" value="{{.Data.Bridge.AllowedUserIDs}}" inputmode="numeric">
+    <p class="sub" style="margin:6px 0 0">
+      只有这些 ID 发来的消息才会被接收，其他人发的直接丢弃。
+      留空保存相当于重新认领：下一个给机器人发消息的人会被自动绑定。
+      多个 ID 用逗号隔开，可私聊 <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a> 查自己的。
+    </p>
+    <label>接收 Telegram 更新的方式</label>
+    <select name="mode">
+      <option value="webhook" {{if eq .Data.Bridge.Mode "webhook"}}selected{{end}}>webhook（Telegram 推送）</option>
+      <option value="poll" {{if eq .Data.Bridge.Mode "poll"}}selected{{end}}>长轮询（桥主动拉取）</option>
+    </select>
+    <p class="sub" style="margin:6px 0 0">只影响桥怎么从 Telegram 取消息，Muse 侧始终是 <code>/poll</code> 拉取。</p>
+    <div class="row" style="margin-top:16px"><button class="btn primary">保存</button></div>
+  </form>
+
+  <div class="row danger-zone">
+    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/status" style="margin:0">
+      {{if eq .Data.Bridge.Status "active"}}
+      <button class="btn" name="status" value="paused">暂停</button>
+      {{else}}
+      <button class="btn primary" name="status" value="active">恢复运行</button>
+      {{end}}
+    </form>
+    <a class="btn danger" href="/bridges/{{.Data.Bridge.ID}}/delete">删除</a>
+    <span class="sub" style="margin:0">删除会连同该桥的全部会话、消息、令牌一起清掉，不可恢复。</span>
+  </div>
 </div>
 {{template "foot" .}}
