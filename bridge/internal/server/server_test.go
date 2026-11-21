@@ -142,7 +142,11 @@ func newFixture(t *testing.T) *fixture {
 	}
 	b.ID = id
 	token := "mb_test_token"
-	if _, err := st.CreateToken(t.Context(), id, "test", secret.HashToken(token), secret.TokenPrefix(token), now); err != nil {
+	tokenEnc, err := box.Seal(token)
+	if err != nil {
+		t.Fatalf("加密令牌: %v", err)
+	}
+	if _, err := st.CreateToken(t.Context(), id, "test", secret.HashToken(token), secret.TokenPrefix(token), tokenEnc, now); err != nil {
 		t.Fatalf("建令牌: %v", err)
 	}
 
@@ -702,17 +706,20 @@ func TestDeleteConfirmPageRenders(t *testing.T) {
 	}
 }
 
-// 模板里不能出现内联脚本或内联事件处理器。
+// 模板里不能出现内联脚本或内联事件处理器，脚本只能引用自带的 /static。
 //
-// 后台的 CSP 是 default-src 'none' 且没有 script-src，
-// 任何 <script> 或 on*="..." 都会被静默丢弃——功能不会报错，
-// 只会莫名其妙不生效。这条测试守住这个约束。
+// 后台的 CSP 是 script-src 'self'，内联 <script> 和 on*="..." 都会被
+// 浏览器静默丢弃——功能不报错，只是莫名其妙不生效。这条测试守住这个约束。
+// 唯一允许的写法是 <script src="/static/..."></script>（复制按钮用），
+// 而且标签体必须为空，防止有人顺手把代码塞进去。
 func TestTemplatesHaveNoInlineScript(t *testing.T) {
 	entries, err := os.ReadDir("templates")
 	if err != nil {
 		t.Fatal(err)
 	}
-	inline := regexp.MustCompile(`(?i)<script|\son[a-z]+\s*=\s*"`)
+	emptyScript := regexp.MustCompile(`(?is)<script[^>]*>\s*</script>`)
+	scriptTag := regexp.MustCompile(`(?is)<script[^>]*>`)
+	handler := regexp.MustCompile(`(?i)\son[a-z]+\s*=\s*["']`)
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
 			continue
@@ -721,9 +728,21 @@ func TestTemplatesHaveNoInlineScript(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if loc := inline.FindIndex(data); loc != nil {
-			t.Fatalf("%s 含有内联脚本/事件处理器（偏移 %d），会被 CSP 挡掉: %q",
-				e.Name(), loc[0], string(data[max(0, loc[0]-40):loc[0]+60]))
+		s := string(data)
+		if loc := handler.FindIndex(data); loc != nil {
+			t.Fatalf("%s 含有内联事件处理器（偏移 %d），会被 CSP 挡掉: %q",
+				e.Name(), loc[0], s[max(0, loc[0]-40):loc[0]+60])
+		}
+		// 先把"空标签 + src"这种合法写法抹掉，剩下的 <script 一律非法。
+		rest := emptyScript.ReplaceAllString(s, "")
+		if loc := strings.Index(strings.ToLower(rest), "<script"); loc >= 0 {
+			t.Fatalf("%s 含有内联脚本（偏移 %d），会被 CSP 挡掉: %q",
+				e.Name(), loc, rest[max(0, loc-40):loc+60])
+		}
+		for _, tag := range scriptTag.FindAllString(s, -1) {
+			if !strings.Contains(tag, `src="/static/`) {
+				t.Fatalf("%s 的脚本只能来自 /static，实际: %s", e.Name(), tag)
+			}
 		}
 	}
 }
@@ -889,5 +908,156 @@ func TestEmptyAllowListIgnoresGroupChatter(t *testing.T) {
 	}
 	if b.AllowedUserIDs != "" {
 		t.Fatalf("群闲聊不该完成绑定，实际 %q", b.AllowedUserIDs)
+	}
+}
+
+// 令牌以前只在签发那一刻显示，关掉就再也拿不到明文。
+// 现在详情页每次都要能复制，否则换个设备就没法把 Muse 接回来。
+func TestTokenCopyableAnyTime(t *testing.T) {
+	f := newFixture(t)
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "/bridges/1", nil)
+		req.AddCookie(f.adminCookie(t))
+		w := httptest.NewRecorder()
+		f.public.ServeHTTP(w, req)
+		body := w.Body.String()
+		if !strings.Contains(body, `data-copy="token"`) {
+			t.Fatalf("第 %d 次打开缺少复制令牌按钮: %.300s", i+1, body)
+		}
+		if !strings.Contains(body, "mb_test_token") {
+			t.Fatalf("第 %d 次打开应看到令牌明文: %.300s", i+1, body)
+		}
+	}
+}
+
+// 提示词要能独立转发：必须有桥地址，但绝不能带上令牌。
+func TestOnboardPromptHasURLAndNoToken(t *testing.T) {
+	f := newFixture(t)
+	req := httptest.NewRequest("GET", "/bridges/1", nil)
+	req.AddCookie(f.adminCookie(t))
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+
+	m := regexp.MustCompile(`(?s)<textarea[^>]*id="prompt"[^>]*>(.*?)</textarea>`).FindStringSubmatch(w.Body.String())
+	if m == nil {
+		t.Fatalf("详情页应有一段可复制的提示词: %.300s", w.Body.String())
+	}
+	prompt := m[1]
+	for _, want := range []string{"https://bridge.test", "demo", "@musebot", "pending-count", "poll"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("提示词应包含 %q，实际:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "mb_test_token") {
+		t.Fatal("提示词里不能出现令牌：它会被整段转发出去")
+	}
+	if !strings.Contains(w.Body.String(), `data-copy="prompt"`) {
+		t.Fatal("缺复制提示词的按钮")
+	}
+}
+
+// 签发新令牌走 303 回到详情页，并且密文要落库，否则下次又复制不出来。
+func TestIssueNewTokenStoresCipherAndRedirects(t *testing.T) {
+	f := newFixture(t)
+	req := httptest.NewRequest("POST", "/bridges/1/tokens", nil)
+	req.AddCookie(f.adminCookie(t))
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("签发后应 303，实际 %d", w.Code)
+	}
+	tokens, err := f.st.ListTokens(t.Context(), f.bridge.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 2 {
+		t.Fatalf("应有 2 枚令牌，实际 %d", len(tokens))
+	}
+	if tokens[0].TokenEnc == "" {
+		t.Fatal("新令牌必须存密文，否则下次打开又只有前缀")
+	}
+}
+
+// 首页的桥列表只留名字，仍然是链接。
+func TestDashboardBridgeListOnlyNames(t *testing.T) {
+	f := newFixture(t)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(f.adminCookie(t))
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	body := w.Body.String()
+	if !strings.Contains(body, `href="/bridges/1"`) || !strings.Contains(body, "演示桥") {
+		t.Fatalf("桥名应仍然可点: %.300s", body)
+	}
+	for _, unwanted := range []string{"运行中", "@musebot", "webhook", "待 Muse 处理"} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("桥列表只留名字，不该再出现 %q", unwanted)
+		}
+	}
+	if !strings.Contains(body, ">待处理<") {
+		t.Fatal("统计卡应写「待处理」")
+	}
+}
+
+// 复制按钮依赖的脚本必须真的能取到，CSP 也只放开同源脚本。
+func TestCopyScriptServed(t *testing.T) {
+	f := newFixture(t)
+	w := f.do(t, "GET", "/static/copy.js", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("copy.js 应 200，实际 %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "clipboard") {
+		t.Fatal("脚本内容不对")
+	}
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") {
+		t.Fatalf("CSP 应只允许同源脚本，实际 %q", csp)
+	}
+}
+
+// 建桥后必须 303 跳到详情页。
+//
+// 以前是把详情页直接渲染在 POST 的响应上，刷新一次就重新提交一次，
+// 第二次只会得到「slug 已被占用」。现在令牌有密文了，跳过去照样能显示。
+func TestCreateBridgeRedirectsToDetail(t *testing.T) {
+	f := newFixture(t)
+	form := "name=新桥&slug=fresh&bot_token=123:AA-new&allowed_user_ids=&mode=webhook"
+	req := httptest.NewRequest("POST", "/bridges", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(f.adminCookie(t))
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("建桥后应 303，实际 %d: %s", w.Code, w.Body)
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/bridges/") || !strings.HasSuffix(loc, "?created=1") {
+		t.Fatalf("应跳到新桥详情页，实际 %q", loc)
+	}
+
+	req2 := httptest.NewRequest("GET", loc, nil)
+	req2.AddCookie(f.adminCookie(t))
+	w2 := httptest.NewRecorder()
+	f.public.ServeHTTP(w2, req2)
+	body := w2.Body.String()
+	if !strings.Contains(body, "桥已创建") {
+		t.Fatalf("刚建好的详情页应点明已创建: %.300s", body)
+	}
+	if !strings.Contains(body, `data-copy="token"`) || !strings.Contains(body, `data-copy="prompt"`) {
+		t.Fatal("新桥详情页应同时能复制提示词和令牌")
+	}
+
+	// 令牌密文必须落库，否则这一页刷新之后又没得复制了。
+	var id int64
+	if err := f.st.DB().QueryRowContext(t.Context(),
+		`SELECT id FROM bridges WHERE slug='fresh'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := f.st.ListTokens(t.Context(), id)
+	if err != nil || len(tokens) != 1 {
+		t.Fatalf("应有一枚令牌，实际 %d: %v", len(tokens), err)
+	}
+	if tokens[0].TokenEnc == "" {
+		t.Fatal("新建桥的令牌应存密文")
 	}
 }

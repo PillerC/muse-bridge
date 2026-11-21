@@ -4,7 +4,7 @@
 
 <div class="grid stats" style="margin-bottom:18px">
   <div class="stat"><b>{{.Data.TodayMessages}}</b><span>今日消息</span></div>
-  <div class="stat"><b>{{.Data.Pending}}</b><span>待 Muse 处理</span></div>
+  <div class="stat"><b>{{.Data.Pending}}</b><span>待处理</span></div>
   <div class="stat"><b>{{.Data.Processing}}</b><span>处理中</span></div>
   <div class="stat"><b>{{.Data.Dead}}</b><span>死信</span></div>
 </div>
@@ -15,23 +15,11 @@
     <a class="btn primary" href="/bridges/new">新建桥</a>
   </div>
   {{if .Data.Bridges}}
-  <div class="tw">
-  <table class="t-bridges">
-    <thead><tr><th>桥</th><th>机器人</th><th>接入</th><th>会话</th><th>待处理</th><th>状态</th></tr></thead>
-    <tbody>
+  <ul class="list">
     {{range .Data.Bridges}}
-      <tr>
-        <td><a href="/bridges/{{.ID}}">{{.Name}}</a><br><span class="mono" style="color:var(--muted)">{{.Slug}}</span></td>
-        <td>{{if .BotUsername}}@{{.BotUsername}}{{else}}<span style="color:var(--muted)">未校验</span>{{end}}</td>
-        <td>{{if eq .Mode "webhook"}}<span class="pill mute">webhook</span>{{else}}<span class="pill mute">长轮询</span>{{end}}</td>
-        <td>{{.Conversations}}</td>
-        <td>{{if .Pending}}<span class="pill warn">{{.Pending}}</span>{{else}}0{{end}}</td>
-        <td>{{if eq .Status "active"}}<span class="pill ok">运行中</span>{{else}}<span class="pill mute">已暂停</span>{{end}}</td>
-      </tr>
+    <li><a href="/bridges/{{.ID}}">{{.Name}}</a></li>
     {{end}}
-    </tbody>
-  </table>
-  </div>
+  </ul>
   {{else}}
   <div class="empty">还没有桥。点右上角「新建桥」，填入机器人 token 就能开一座。</div>
   {{end}}

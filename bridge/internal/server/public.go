@@ -18,7 +18,7 @@ import (
 // 后台就在根路径上：直接打开域名首页就是总览（没登录会跳 /login），
 // 不再需要 /admin 前缀。放开的前提是后台本身有三道闸：
 // 会话 cookie 校验、登录失败限流、以及下方 securityHeaders 给的 CSP
-// 与 frame-ancestors（后台页面不含任何 JS，所以 script-src 直接禁死）。
+// 与 frame-ancestors（脚本只允许同源的复制按钮那一份）。
 func (s *Server) Public() http.Handler {
 	mux := http.NewServeMux()
 	s.registerPublic(mux)
@@ -57,8 +57,10 @@ func (s *Server) registerPublic(mux *http.ServeMux) {
 
 // securityHeaders 给后台页面加上防点击劫持、防 MIME 嗅探和严格 CSP。
 //
-// 后台模板里没有任何 <script>，所以 script-src 可以设成 'none'；
-// 只有样式用了内联 style 属性，故 style-src 保留 'unsafe-inline'。
+// script-src 只放开同源：后台带着令牌明文，页面里出现任何第三方或内联脚本
+// 都等于把令牌交给它。所以脚本只有一个自带的 /static/copy.js（复制按钮），
+// 模板里依旧不允许写内联 <script>，也没有 'unsafe-inline'。
+// 样式用的是内联 style 属性，故 style-src 保留 'unsafe-inline'。
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -66,9 +68,9 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Content-Security-Policy",
-			"default-src 'none'; style-src 'self' 'unsafe-inline'; "+
-				"img-src 'self' data:; form-action 'self'; base-uri 'none'; "+
-				"frame-ancestors 'none'")
+			"default-src 'none'; script-src 'self'; script-src-attr 'none'; "+
+				"style-src 'self' 'unsafe-inline'; img-src 'self' data:; "+
+				"form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }

@@ -31,6 +31,18 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// 令牌早期只存摘要，明文看一眼就没了。摘要不可逆，老令牌的明文补不回来，
+	// 只能加一列给新令牌存密文；老令牌在后台标成"无法显示"，由人重签。
+	tokenCols, err := s.tableColumns(ctx, "bridge_tokens")
+	if err != nil {
+		return err
+	}
+	if !tokenCols["token_enc"] {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE bridge_tokens ADD COLUMN token_enc TEXT`); err != nil {
+			return fmt.Errorf("添加 token_enc 列失败: %w", err)
+		}
+	}
 	return nil
 }
 

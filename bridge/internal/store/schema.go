@@ -32,8 +32,11 @@ CREATE TABLE IF NOT EXISTS bridge_tokens (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   bridge_id    INTEGER NOT NULL REFERENCES bridges(id) ON DELETE CASCADE,
   label        TEXT,
+  -- 查令牌用摘要，展示用密文。摘要不可逆，所以"以后还能复制令牌"
+  -- 只能靠留一份 AES-GCM 密文（与机器人 token 同一把钥匙）。
   token_hash   TEXT    NOT NULL UNIQUE,
   token_prefix TEXT    NOT NULL,
+  token_enc    TEXT,
   last_used_at INTEGER,
   revoked_at   INTEGER,
   created_at   INTEGER NOT NULL

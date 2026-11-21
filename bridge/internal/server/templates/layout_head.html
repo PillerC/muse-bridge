@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>{{.Title}} · Muse Bridge</title>
+  <script src="/static/copy.js" defer></script>
   <style>
     :root{
       --bg:#f6f7f9; --panel:#ffffff; --line:#e3e6ea; --text:#1c1f23;
@@ -58,6 +59,15 @@
     code{overflow-wrap:anywhere}
     .token{background:#f7f8fa;border:1px dashed var(--line);border-radius:8px;padding:10px 12px;
       word-break:break-all;font-family:var(--mono);font-size:13px}
+    /* 一键复制那两块：标题和按钮同一行，内容是只读的等宽块。
+       提示词要能看清换行，用 textarea 而不是 div——它也天生可全选。 */
+    .copyhead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:18px 0 7px}
+    .copyhead.first{margin-top:0}
+    .copyhead .lbl{margin:0;font-size:13px;color:var(--muted)}
+    textarea.copybox{width:100%;min-height:230px;padding:11px 12px;border:1px solid var(--line);
+      border-radius:8px;background:#f7f8fa;color:var(--text);resize:vertical;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65}
+    .copybtn{white-space:nowrap;flex:0 0 auto}
     label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}
     input[type=text],input[type=password],input[type=search],select,textarea{
       width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-size:14px;
@@ -127,18 +137,14 @@
       .meta .pill{font-size:10.5px;padding:1px 6px}
       footer{padding:16px 0 28px}
 
-      /* 列多的表在手机上先藏次要列：桥列表去掉「接入」「会话」，
-         令牌表去掉「最近使用」。剩下的列才站得住；还挤就靠 .tw 横向滚动。 */
-      .t-bridges th:nth-child(3),.t-bridges td:nth-child(3),
-      .t-bridges th:nth-child(4),.t-bridges td:nth-child(4){display:none}
-      .t-tokens th:nth-child(3),.t-tokens td:nth-child(3){display:none}
-    }
+      /* 提示词是只读的，不参与上面那条 16px 防缩放规则：
+         真按 16px 排，一段说明能占满两屏。 */
+      textarea.copybox{font-size:12px;min-height:210px}
+      .copyhead{margin:16px 0 6px}
 
-    /* 小屏手机（≤375px，iPhone SE/mini 这一档）：桥列表再藏一列机器人，
-       否则「运行中」会被挤出卡片。390px 以上放得下，就保留。
-       这是主动取舍，不是让它横向滚动——一行能看全比能滑更重要。 */
-    @media(max-width:375px){
-      .t-bridges th:nth-child(2),.t-bridges td:nth-child(2){display:none}
+      /* 列多的表在手机上先藏次要列：令牌表去掉「最近使用」。
+         剩下的列才站得住；还挤就靠 .tw 横向滚动。 */
+      .t-tokens th:nth-child(3),.t-tokens td:nth-child(3){display:none}
     }
   </style>
 </head>

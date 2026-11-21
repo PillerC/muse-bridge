@@ -30,13 +30,15 @@ type Bridge struct {
 	UpdatedAt      int64
 }
 
-// Token 是桥令牌的元数据，不含明文。
+// Token 是桥令牌。TokenHash 用于鉴权，TokenEnc 是明文密文，
+// 让后台随时能再复制一次（老记录没有密文，TokenEnc 为空）。
 type Token struct {
 	ID          int64
 	BridgeID    int64
 	Label       string
 	TokenHash   string
 	TokenPrefix string
+	TokenEnc    string
 	LastUsedAt  int64
 	RevokedAt   int64
 	CreatedAt   int64
@@ -172,11 +174,14 @@ func (s *Store) DeleteBridge(ctx context.Context, id int64) error {
 	})
 }
 
-// CreateToken 保存令牌摘要。
-func (s *Store) CreateToken(ctx context.Context, bridgeID int64, label, hash, prefix string, now int64) (int64, error) {
+// CreateToken 保存令牌摘要与密文。
+//
+// 摘要用于查库鉴权，密文用于后台再次展示。两者都不可缺：
+// 只存摘要就永远复制不出第二次，只存密文则每次鉴权都要全表解密。
+func (s *Store) CreateToken(ctx context.Context, bridgeID int64, label, hash, prefix, enc string, now int64) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO bridge_tokens (bridge_id, label, token_hash, token_prefix, created_at)
-		 VALUES (?,?,?,?,?)`, bridgeID, label, hash, prefix, now)
+		`INSERT INTO bridge_tokens (bridge_id, label, token_hash, token_prefix, token_enc, created_at)
+		 VALUES (?,?,?,?,?,?)`, bridgeID, label, hash, prefix, enc, now)
 	if err != nil {
 		return 0, err
 	}
@@ -212,7 +217,7 @@ func (s *Store) TouchToken(ctx context.Context, tokenID, now int64) {
 func (s *Store) ListTokens(ctx context.Context, bridgeID int64) ([]*Token, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, bridge_id, COALESCE(label,''), token_hash, token_prefix,
-		        COALESCE(last_used_at,0), COALESCE(revoked_at,0), created_at
+		        COALESCE(token_enc,''), COALESCE(last_used_at,0), COALESCE(revoked_at,0), created_at
 		   FROM bridge_tokens WHERE bridge_id=? ORDER BY id DESC`, bridgeID)
 	if err != nil {
 		return nil, err
@@ -222,7 +227,7 @@ func (s *Store) ListTokens(ctx context.Context, bridgeID int64) ([]*Token, error
 	for rows.Next() {
 		var t Token
 		if err := rows.Scan(&t.ID, &t.BridgeID, &t.Label, &t.TokenHash, &t.TokenPrefix,
-			&t.LastUsedAt, &t.RevokedAt, &t.CreatedAt); err != nil {
+			&t.TokenEnc, &t.LastUsedAt, &t.RevokedAt, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &t)

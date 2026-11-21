@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
@@ -27,6 +28,9 @@ const sessionTTL = 12 * time.Hour
 
 //go:embed templates/*.html
 var tplFS embed.FS
+
+//go:embed static/*
+var staticFS embed.FS
 
 // Admin 返回只含后台的独立 handler。
 //
@@ -65,6 +69,12 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /conversations/{id}", s.withAdmin(s.handleConversation))
 	mux.HandleFunc("GET /export", s.withAdmin(s.handleExportPage))
 	mux.HandleFunc("POST /jobs/{id}/replay", s.withAdmin(s.handleReplay))
+
+	// 后台唯一的静态资源：复制按钮用的一小段脚本。
+	// 以前后台完全不带 JS（CSP 里 script-src 是禁死的），但"一键复制"
+	// 没有别的办法——execCommand 需要脚本，纯 CSS 做不到写剪贴板。
+	// 折中是只允许同源的这一个文件，模板里仍然不允许出现内联脚本。
+	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 
 	// 老地址只做跳转：手机书签和早就打开着的页面里还是 /admin/xxx。
 	// 用 308 而不是 301，表单 POST 跟过去仍然是 POST，
@@ -360,20 +370,27 @@ func (s *Server) handleCreateBridge(w http.ResponseWriter, r *http.Request) {
 	b.ID = id
 
 	token := secret.NewToken()
-	if _, err := s.st.CreateToken(ctx, id, "默认", secret.HashToken(token), secret.TokenPrefix(token), now); err != nil {
+	encToken, err := s.svc.Box.Seal(token)
+	if err != nil {
+		s.flash(w, r, "err", "加密令牌失败："+err.Error())
+		return
+	}
+	if _, err := s.st.CreateToken(ctx, id, "默认", secret.HashToken(token), secret.TokenPrefix(token), encToken, now); err != nil {
 		s.flash(w, r, "err", "创建令牌失败："+err.Error())
 		return
 	}
 
-	notice := ""
 	if mode == "webhook" && s.cfg.PublicURL != "" {
 		whCtx, whCancel := context.WithTimeout(ctx, 20*time.Second)
 		defer whCancel()
 		if err := client.SetWebhook(whCtx, s.cfg.PublicURL+"/tg/"+slug, b.WebhookSecret); err != nil {
-			notice = "webhook 注册失败（" + err.Error() + "），可在详情页重试；也可以先用长轮询。"
+			setFlash(w, "err", "webhook 注册失败（"+err.Error()+"），可在详情页重试；也可以改用长轮询。")
 		}
 	}
-	s.renderBridge(w, r, b, token, notice)
+	// 用 303 跳过去而不是直接把详情页渲染在这个 POST 上：
+	// 否则刷新一次就重新提交一遍建桥表单，第二次只会得到「slug 已被占用」。
+	// 令牌已经存了密文，跳转后详情页照样能显示，不再依赖"只此一次"。
+	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10)+"?created=1", http.StatusSeeOther)
 }
 
 // ---------- 桥详情 ----------
@@ -385,8 +402,18 @@ type bridgeDetailData struct {
 	DeadJobs      []*store.DeadJob
 	BaseURL       string
 	WebhookURL    string
-	NewToken      string
 	Blocked       *domain.BlockedNotice
+
+	// 接入 Muse 的两段可复制文本。
+	//
+	// 令牌刻意不拼进提示词：提示词是"拿去发给别人/别的 agent"的东西，
+	// 一旦混进令牌，它就会跟着聊天记录、剪贴板历史一起扩散。
+	// 分成两个按钮，用户想什么时候发、发给谁都能自己控制。
+	Prompt      string
+	Token       string // 当前有效令牌的明文；没有可用令牌时为空
+	TokenID     int64
+	TokenLegacy bool // 有有效令牌，但签发于"存密文"之前，复制不出来
+	JustCreated bool
 }
 
 func (s *Server) handleBridgeDetail(w http.ResponseWriter, r *http.Request) {
@@ -396,10 +423,10 @@ func (s *Server) handleBridgeDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.renderBridge(w, r, b, "", "")
+	s.renderBridge(w, r, b, r.URL.Query().Get("created") == "1")
 }
 
-func (s *Server) renderBridge(w http.ResponseWriter, r *http.Request, b *store.Bridge, newToken, flashMsg string) {
+func (s *Server) renderBridge(w http.ResponseWriter, r *http.Request, b *store.Bridge, justCreated bool) {
 	ctx := r.Context()
 	tokens, _ := s.st.ListTokens(ctx, b.ID)
 	convs, _ := s.st.ListConversations(ctx, b.ID, 100)
@@ -419,14 +446,70 @@ func (s *Server) renderBridge(w http.ResponseWriter, r *http.Request, b *store.B
 	if n, ok := s.svc.BlockedNotice(b.ID); ok {
 		blocked = &n
 	}
+
+	// 令牌按签发顺序倒序，取最新一枚还有效的。
+	var tokID int64
+	legacy := false
+	tokPlain := ""
+	for _, t := range tokens {
+		if t.RevokedAt != 0 {
+			continue
+		}
+		tokID = t.ID
+		if t.TokenEnc == "" {
+			legacy = true
+			break
+		}
+		p, err := s.svc.Box.Open(t.TokenEnc)
+		if err != nil {
+			legacy = true
+			break
+		}
+		tokPlain = p
+		break
+	}
+
 	s.render(w, r, "bridge_detail.html", pageData{
 		Title: b.Name, Active: "dashboard", Admin: true,
-		Flash: flashMsg, FlashKind: "err",
 		Data: bridgeDetailData{
 			Bridge: b, Tokens: tokens, Conversations: convs, DeadJobs: dead,
-			BaseURL: base, WebhookURL: wh, NewToken: newToken, Blocked: blocked,
+			BaseURL: base, WebhookURL: wh, Blocked: blocked,
+			Prompt: onboardPrompt(b, base), Token: tokPlain,
+			TokenID: tokID, TokenLegacy: legacy, JustCreated: justCreated,
 		},
 	})
+}
+
+// onboardPrompt 生成"发给 Muse"的接入说明。
+//
+// 里面只放地址、桥标识和调用节奏，不放令牌。这份文本是要被整段
+// 复制到别处的，任何凭据都不该跟着走。
+func onboardPrompt(b *store.Bridge, base string) string {
+	var sb strings.Builder
+	sb.WriteString("请接入一座 Telegram ↔ Muse 的桥，用 custom.muse-bridge connector。\n\n")
+	fmt.Fprintf(&sb, "桥地址（BASE）：%s\n", base)
+	fmt.Fprintf(&sb, "桥标识：%s\n", b.Slug)
+	if b.BotUsername != "" {
+		fmt.Fprintf(&sb, "对应机器人：@%s\n", b.BotUsername)
+	}
+	sb.WriteString(`
+接入步骤：
+1. 把 connector 的 base_url 设成上面的桥地址，api_hosts 用这个域名；
+2. 令牌我另外单独发给你。收到后按 bearer_header 方式带上，不要写进文档、脚本、命令行参数或日志；
+3. 不要向我要机器人 token —— 它在桥里，Muse 不需要也不该拿到；
+4. 接好后先跑一次 muse-bridge.py stats 确认连通，再开始收消息。
+
+每条消息的节奏：
+- pending-count 看有没有待处理消息，为 0 就结束这一轮，不要回复任何东西；
+- 有消息就 poll 认领（带上够覆盖你思考时间的 lease_seconds）；
+- 想好后用 reply 发出，桥会自动分段、退避重试并 ack，发完不用再调 ack；
+- 真的没能完成才调 fail，桥会按退避重投，超过上限进死信、后台可重放；
+- 长任务在租约过半时 extend 续租。
+
+「正在输入…」由桥负责：消息被认领的那一刻起就持续给 Telegram 发 typing，
+直到 reply / ack / fail 或租约到期。你不需要发 sendChatAction。
+`)
+	return sb.String()
 }
 
 func (s *Server) handleBridgeSettings(w http.ResponseWriter, r *http.Request) {
@@ -484,18 +567,23 @@ func (s *Server) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNewToken(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	b, err := s.st.GetBridgeByID(r.Context(), id)
-	if err != nil {
+	if _, err := s.st.GetBridgeByID(r.Context(), id); err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	token := secret.NewToken()
+	enc, err := s.svc.Box.Seal(token)
+	if err != nil {
+		s.flashToBridge(w, r, id, "加密令牌失败："+err.Error())
+		return
+	}
 	now := s.svc.Now()
-	if _, err := s.st.CreateToken(r.Context(), id, "手动签发", secret.HashToken(token), secret.TokenPrefix(token), now); err != nil {
+	if _, err := s.st.CreateToken(r.Context(), id, "手动签发", secret.HashToken(token), secret.TokenPrefix(token), enc, now); err != nil {
 		s.flashToBridge(w, r, id, "签发失败："+err.Error())
 		return
 	}
-	s.renderBridge(w, r, b, token, "")
+	setFlash(w, "ok", "已签发新令牌。旧令牌仍然有效，要停用请点它那一行的「吊销」。")
+	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {

@@ -208,7 +208,7 @@ Idempotency-Key: 42-a1b2c3          // 必填，重复提交返回上次结果
 | GET | `/api/bridges` | 桥列表（含机器人用户名、待办数、今日消息数） |
 | POST | `/api/bridges` | 建桥，入参 `{name, bot_token}` |
 | PATCH | `/api/bridges/:id` | 改名、启停、允许的用户 ID |
-| POST | `/api/bridges/:id/tokens` | 签发新令牌，明文仅本次返回 |
+| POST | `/api/bridges/:id/tokens` | 签发新令牌，明文加密落库，后台随时可再复制 |
 | DELETE | `/api/bridges/:id/tokens/:tid` | 吊销令牌 |
 | GET | `/api/bridges/:id/conversations` | 会话列表 |
 | GET | `/api/conversations/:id/messages` | 消息分页（游标 `before_id`） |
@@ -224,7 +224,7 @@ Idempotency-Key: 42-a1b2c3          // 必填，重复提交返回上次结果
 3. 生成 `slug`、`webhook_secret`；调 `setWebhook` 指向
    `https://<域名>/tg/<slug>`，带上 `secret_token` 与 `allowed_updates:["message"]`。
 4. 生成 `api_token`，只存哈希，明文仅在响应里出现一次。
-5. 页面显示「接入地址 + 令牌」，可复制、可再签一枚。
+5. 页面分两块给出「接入提示词（含地址）」和「令牌」，各一个复制按钮；
 6. Muse 侧配置这两个值即完成接入，全程接触不到机器人 token。
 
 失败可回滚：setWebhook 失败时不创建桥，或创建为 `paused` 并提示原因。

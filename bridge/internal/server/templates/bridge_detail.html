@@ -31,13 +31,43 @@
 </div>
 {{end}}
 
-{{if .Data.NewToken}}
-<div class="card" style="border-color:#bfd3ff;background:var(--accent-weak)">
-  <h2>新令牌（只显示这一次）</h2>
-  <p class="sub" style="margin-bottom:10px">把这个令牌和下面的接入地址发给 Muse，让它自己接入。关掉页面就再也看不到明文了。</p>
-  <div class="token">{{.Data.NewToken}}</div>
+<div class="card" style="border-color:#bfd3ff">
+  <h2>{{if .Data.JustCreated}}桥已创建，接下来交给 Muse{{else}}接入 Muse{{end}}</h2>
+  <p class="sub" style="margin:0 0 4px">
+    下面两段分开复制。第一段是接入说明，含这座桥的地址，可以直接转发；
+    令牌单独一段，不放进提示词里——提示词经常被转手，令牌不该跟着走。
+  </p>
+
+  <div class="copyhead first">
+    <p class="lbl">① 接入提示词（发给 Muse）</p>
+    <button type="button" class="btn copybtn" data-copy="prompt">复制提示词</button>
+  </div>
+  <textarea class="copybox" id="prompt" readonly spellcheck="false">{{.Data.Prompt}}</textarea>
+
+  <div class="copyhead">
+    <p class="lbl">② 桥令牌
+      {{if .Data.TokenLegacy}}<span class="pill mute">旧令牌无法显示</span>{{end}}
+    </p>
+    {{if .Data.Token}}<button type="button" class="btn copybtn" data-copy="token">复制令牌</button>{{end}}
+  </div>
+
+  {{if .Data.Token}}
+  <div class="token" id="token">{{.Data.Token}}</div>
+  <p class="sub" style="margin:8px 0 0">
+    令牌在这页随时能再复制一次，不用重新签发。怀疑泄露就签发新的，再把旧的吊销。
+  </p>
+  {{else if .Data.TokenLegacy}}
+  <div class="token" style="color:var(--muted)">这枚令牌签发得比「随时可复制」早，当时只存了摘要，明文已经找不回来。</div>
+  <form method="post" action="/bridges/{{.Data.Bridge.ID}}/tokens" style="margin-top:10px">
+    <button class="btn primary">签发一枚可复制的令牌</button>
+  </form>
+  {{else}}
+  <div class="empty" style="padding:8px 0">还没有有效令牌，Muse 现在无法接入。</div>
+  <form method="post" action="/bridges/{{.Data.Bridge.ID}}/tokens">
+    <button class="btn primary">签发令牌</button>
+  </form>
+  {{end}}
 </div>
-{{end}}
 
 <div class="split">
   <div class="card">
