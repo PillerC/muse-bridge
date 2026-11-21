@@ -598,25 +598,20 @@ func TestPublicServesAdmin(t *testing.T) {
 	}
 }
 
-// 老的 /admin 链接只做跳转：手机书签、早就打开的标签页里还是旧地址，
-// 直接 404 会让人以为服务挂了。用 308 而不是 301，
-// 表单 POST 跟过去仍然是 POST，不会把"吊销令牌"降级成 GET。
-func TestLegacyAdminPathRedirectsToRoot(t *testing.T) {
+// 后台搬到根路径后，旧的 /admin/* 已彻底移除，不再做跳转：
+// 这些路径现在应该干净地 404，而不是把人送到某个残留页面上。
+func TestLegacyAdminPathGone(t *testing.T) {
 	f := newFixture(t)
-	cases := map[string]string{
-		"/admin":           "/",
-		"/admin/":          "/",
-		"/admin/login":     "/login",
-		"/admin/bridges/1": "/bridges/1",
-		"/admin/export?format=csv&bridge_id=0": "/export?format=csv&bridge_id=0",
-	}
-	for from, want := range cases {
-		w := f.do(t, "GET", from, "", nil)
-		if w.Code != http.StatusPermanentRedirect {
-			t.Fatalf("%s 应 308，实际 %d", from, w.Code)
-		}
-		if loc := w.Header().Get("Location"); loc != want {
-			t.Fatalf("%s 应跳到 %q，实际 %q", from, want, loc)
+	for _, path := range []string{
+		"/admin",
+		"/admin/",
+		"/admin/login",
+		"/admin/bridges/1",
+		"/admin/export?format=csv&bridge_id=0",
+	} {
+		w := f.do(t, "GET", path, "", nil)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s 应 404，实际 %d", path, w.Code)
 		}
 	}
 }

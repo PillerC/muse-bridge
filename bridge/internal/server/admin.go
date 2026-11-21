@@ -75,27 +75,6 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	// 没有别的办法——execCommand 需要脚本，纯 CSS 做不到写剪贴板。
 	// 折中是只允许同源的这一个文件，模板里仍然不允许出现内联脚本。
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
-
-	// 老地址只做跳转：手机书签和早就打开着的页面里还是 /admin/xxx。
-	// 用 308 而不是 301，表单 POST 跟过去仍然是 POST，
-	// 否则"吊销令牌"这类操作会被降级成 GET 然后 405。
-	mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
-		redirectLegacyAdmin(w, r, "/")
-	})
-	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
-		redirectLegacyAdmin(w, r, strings.TrimPrefix(r.URL.Path, "/admin"))
-	})
-}
-
-// redirectLegacyAdmin 把 /admin 下的旧链接原地换到根路径，查询串原样带上。
-func redirectLegacyAdmin(w http.ResponseWriter, r *http.Request, target string) {
-	if target == "" {
-		target = "/"
-	}
-	if q := r.URL.RawQuery; q != "" {
-		target += "?" + q
-	}
-	http.Redirect(w, r, target, http.StatusPermanentRedirect)
 }
 
 // ---------- 渲染 ----------
