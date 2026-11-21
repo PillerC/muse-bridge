@@ -22,6 +22,48 @@ tail -f /data/log/muse-bridge.log
 curl -s https://<域名>/health
 ```
 
+## systemd（Debian / Ubuntu）
+
+上面的路径只是约定，换一个目录、换一个服务管理器同样能跑。Debian / Ubuntu 上整套装在一个目录里最省事，下面以 `/opt/muse-bridge` 为例：
+
+| 路径 | 内容 |
+|---|---|
+| `/opt/muse-bridge/bridge` | 二进制 |
+| `/opt/muse-bridge/bridge-data/` | `bridge.db` + `certs/`，`chmod 700` |
+| `/opt/muse-bridge/muse-bridge.env` | 配置，`chmod 600` |
+| `/opt/muse-bridge/log/` | `muse-bridge.log` / `muse-bridge.err` |
+
+```ini
+# /etc/systemd/system/muse-bridge.service
+[Unit]
+Description=Muse Bridge (Telegram <-> Muse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/muse-bridge/muse-bridge.env
+ExecStart=/opt/muse-bridge/bridge
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+StandardOutput=append:/opt/muse-bridge/log/muse-bridge.log
+StandardError=append:/opt/muse-bridge/log/muse-bridge.err
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl enable --now muse-bridge
+systemctl status muse-bridge --no-pager
+journalctl -u muse-bridge -n 50 --no-pager   # 日志写的是文件，这个只用于排查启动失败
+```
+
+env 里的 `BRIDGE_DATA_DIR` 要跟着改成 `/opt/muse-bridge/bridge-data`。迁移整机时把 `bridge.db`（连 `-wal` 一起）、
+`certs/`、env 三样拷过去即可：`certs/` 带着就不用重新申请证书，`BRIDGE_SECRET` 不变则已加密的 bot token 仍能解开。
+**先停旧机的服务再拷库**，别在运行时复制 `.db`。
+
 日志目前不轮转。单条日志都很短，但长期跑建议加一个 cron：
 
 ```bash
