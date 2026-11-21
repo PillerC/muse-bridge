@@ -435,9 +435,9 @@ func TestDraftThenFinalEditsSameMessage(t *testing.T) {
 	}
 }
 
-// 早期提示词里写的是 {"job_id":...}，已经发到各个 Muse 手上收不回来，
-// 所以这个拼写要当成 id 的别名认下来，否则它们换个桥就直接 400。
-func TestReplyAcceptsLegacyJobIDField(t *testing.T) {
+// 早期提示词里写的是 {"job_id":...}，现在只剩一座桥、直接重建即可，
+// 不再为这个拼写留别名：写错就该 400，而不是含糊地查一个 id=0 的任务。
+func TestReplyRejectsLegacyJobIDField(t *testing.T) {
 	f := newFixture(t)
 	_ = f.do(t, "POST", "/tg/demo", sampleUpdate,
 		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"})
@@ -451,11 +451,11 @@ func TestReplyAcceptsLegacyJobIDField(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &poll)
 
 	body := fmt.Sprintf(`{"job_id":%d,"lease_id":%q,"text":"旧写法"}`, poll.Messages[0].ID, poll.LeaseID)
-	if w := f.do(t, "POST", "/reply", body, f.auth()); w.Code != 200 {
-		t.Fatalf("job_id 应被当作 id 的别名，实际 %d %s", w.Code, w.Body)
+	if w := f.do(t, "POST", "/reply", body, f.auth()); w.Code != 400 {
+		t.Fatalf("job_id 应被拒绝并返回 400，实际 %d %s", w.Code, w.Body)
 	}
-	if len(f.tg.sent) != 1 {
-		t.Fatalf("应发出一条消息，实际 %v", f.tg.sent)
+	if len(f.tg.sent) != 0 {
+		t.Fatalf("字段名错误不应发出消息，实际 %v", f.tg.sent)
 	}
 }
 

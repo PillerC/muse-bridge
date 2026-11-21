@@ -129,8 +129,8 @@ Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 `/poll` 返回的每条消息都带自己的 `lease_id`，避免两批消息混在一起时 ack 用错租约。
 
 `/reply` 的任务 id 字段是 `id`；`mode` 只能是 `draft` 或 `final`，省略按 `final` 处理
-（`draft` 建占位消息、后续调用编辑同一条，`final` 定稿并自动 ack）。
-早期提示词把它写成了 `job_id`，服务端仍然接受这个拼写作为 `id` 的别名。
+（`draft` 建占位消息、后续调用编辑同一条，`final` 定稿并自动 ack）。字段名写错会被拒（400），
+不会静默当成别的字段。
 
 ## 管理后台
 

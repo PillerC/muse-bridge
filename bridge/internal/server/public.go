@@ -308,7 +308,6 @@ func (s *Server) handleReply(w http.ResponseWriter, r *http.Request) {
 	b := bridgeFrom(r.Context())
 	var body struct {
 		ID        int64  `json:"id"`
-		JobID     int64  `json:"job_id"` // 早期提示词写的是 job_id，留着当别名
 		LeaseID   string `json:"lease_id"`
 		Text      string `json:"text"`
 		Mode      string `json:"mode"`
@@ -319,11 +318,8 @@ func (s *Server) handleReply(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "请求体必须是 {id, lease_id, text, mode}")
 		return
 	}
-	// readJSON 开了 DisallowUnknownFields：老提示词照抄 job_id 时不会 400，
-	// 但要靠这里把值搬到 id 上，否则任务永远查不到。
-	if body.ID == 0 {
-		body.ID = body.JobID
-	}
+	// readJSON 开了 DisallowUnknownFields：字段名写错（比如 job_id）会直接 400，
+	// 比默默当成 id=0 去查一个不存在的任务更好排查。
 	autoAck := true
 	if body.Ack != nil {
 		autoAck = *body.Ack
