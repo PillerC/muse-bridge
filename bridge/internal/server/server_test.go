@@ -1073,7 +1073,8 @@ func TestCopyScriptServed(t *testing.T) {
 // 第二次只会得到「slug 已被占用」。现在令牌有密文了，跳过去照样能显示。
 func TestCreateBridgeRedirectsToDetail(t *testing.T) {
 	f := newFixture(t)
-	form := "name=新桥&slug=fresh&bot_token=123:AA-new&allowed_user_ids=&mode=webhook"
+	// slug 不再由用户填：表单里没有这个字段，服务端随机生成。
+	form := "name=新桥&bot_token=123:AA-new&allowed_user_ids=&mode=webhook"
 	req := httptest.NewRequest("POST", "/bridges", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(f.adminCookie(t))
@@ -1102,9 +1103,14 @@ func TestCreateBridgeRedirectsToDetail(t *testing.T) {
 
 	// 令牌密文必须落库，否则这一页刷新之后又没得复制了。
 	var id int64
+	var slug string
 	if err := f.st.DB().QueryRowContext(t.Context(),
-		`SELECT id FROM bridges WHERE slug='fresh'`).Scan(&id); err != nil {
+		`SELECT id, slug FROM bridges WHERE name='新桥' ORDER BY id DESC LIMIT 1`).Scan(&id, &slug); err != nil {
 		t.Fatal(err)
+	}
+	// slug 可以出现在 URL 里，所以必须是安全字符；长度固定便于辨认。
+	if !regexp.MustCompile(`^[a-z0-9]{10}$`).MatchString(slug) {
+		t.Fatalf("自动生成的 slug 不合法：%q", slug)
 	}
 	tokens, err := f.st.ListTokens(t.Context(), id)
 	if err != nil || len(tokens) != 1 {
@@ -1112,5 +1118,131 @@ func TestCreateBridgeRedirectsToDetail(t *testing.T) {
 	}
 	if tokens[0].TokenEnc == "" {
 		t.Fatal("新建桥的令牌应存密文")
+	}
+}
+
+// 页脚那句宣传语已经从所有页面删掉了；提示词默认折叠，展开按钮用原生 details。
+func TestNoFooterAndFoldedPrompt(t *testing.T) {
+	f := newFixture(t)
+	cookie := f.adminCookie(t)
+	for _, path := range []string{"/", "/bridges/new", "/bridges/1", "/export", "/account"} {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		f.public.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("%s 应 200，实际 %d", path, w.Code)
+		}
+		body := w.Body.String()
+		if strings.Contains(body, "消息双向落库") {
+			t.Fatalf("%s 仍然带着页脚宣传语", path)
+		}
+		if strings.Contains(body, "<footer") {
+			t.Fatalf("%s 仍然渲染了 footer 元素", path)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/bridges/1", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), `class="fold"`) || !strings.Contains(w.Body.String(), "<summary>") {
+		t.Fatal("提示词应包在默认折叠的 details 里，并带展开按钮")
+	}
+	// 折叠只影响显示，复制按钮仍然要能取到 textarea 的值。
+	if !strings.Contains(w.Body.String(), `data-copy="prompt"`) {
+		t.Fatal("折叠后仍要保留复制提示词的按钮")
+	}
+}
+
+// 新建桥不再让人填 slug，也不再显示那两段解释。
+func TestNewBridgeFormHasNoSlugField(t *testing.T) {
+	f := newFixture(t)
+	req := httptest.NewRequest("GET", "/bridges/new", nil)
+	req.AddCookie(f.adminCookie(t))
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	body := w.Body.String()
+	for _, gone := range []string{`name="slug"`, "只能小写字母、数字和连字符", "第一个给机器人发消息的人会自动成为唯一允许的人", "创建时会调用"} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("新建页不该再出现 %q", gone)
+		}
+	}
+	if !strings.Contains(body, "私聊 @userinfobot 获取ID") {
+		t.Fatal("允许列表的说明应写明去哪里拿 ID")
+	}
+}
+
+// 账号页：改用户名、改密码都走这里，改密码要先验当前密码。
+func TestAccountChangeUsernameAndPassword(t *testing.T) {
+	f := newFixture(t)
+	cookie := f.adminCookie(t)
+
+	post := func(form string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/account", strings.NewReader(form))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		f.public.ServeHTTP(w, req)
+		return w
+	}
+	login := func(user, pass string) int {
+		req := httptest.NewRequest("POST", "/login",
+			strings.NewReader("username="+user+"&password="+pass))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		f.public.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// 当前密码不对：什么都不改。
+	if w := post("current_password=wrong&username=hacker"); w.Code != http.StatusSeeOther {
+		t.Fatalf("应 303 回账号页，实际 %d", w.Code)
+	}
+	if login("admin", "pw") != http.StatusSeeOther {
+		t.Fatal("密码验错时不该改动账号")
+	}
+
+	// 只改用户名。
+	if w := post("current_password=pw&username=goojia"); w.Code != http.StatusSeeOther {
+		t.Fatalf("改名后应 303，实际 %d", w.Code)
+	}
+	if login("goojia", "pw") != http.StatusSeeOther {
+		t.Fatal("改名后应能用新用户名登录")
+	}
+	if login("admin", "pw") != http.StatusOK { // 200 = 停在登录页，没有 cookie
+		t.Fatal("旧用户名不该还能登录")
+	}
+
+	// 密码太短要被挡回来。
+	if w := post("current_password=pw&username=goojia&password=short&password2=short"); w.Code != http.StatusSeeOther {
+		t.Fatalf("应 303，实际 %d", w.Code)
+	}
+	if login("goojia", "pw") != http.StatusSeeOther {
+		t.Fatal("密码没改成时旧密码应继续有效")
+	}
+
+	// 两次输入不一致同样挡回来。
+	post("current_password=pw&username=goojia&password=abcdefgh&password2=abcdefgi")
+	if login("goojia", "pw") != http.StatusSeeOther {
+		t.Fatal("两次不一致时不该改密码")
+	}
+
+	// 正常改密码：旧会话全部作废，跳登录页。
+	if w := post("current_password=pw&username=goojia&password=newpass123&password2=newpass123"); w.Code != http.StatusSeeOther {
+		t.Fatalf("改密码后应 303，实际 %d", w.Code)
+	}
+	var sessions int
+	if err := f.st.DB().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sessions`).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Fatalf("改密码后应清空所有会话，实际还剩 %d 个", sessions)
+	}
+	if login("goojia", "newpass123") != http.StatusSeeOther {
+		t.Fatal("应能用新密码登录")
+	}
+	if login("goojia", "pw") != http.StatusOK {
+		t.Fatal("旧密码应失效")
 	}
 }

@@ -28,9 +28,11 @@ type Config struct {
 	TLSKey  string
 	// DataDir 放数据库、日志、证书缓存。
 	DataDir string
-	// AdminUser / AdminPassword 用于创建或同步管理员密码。
+	// AdminUser / AdminPassword 是**初始**管理员：只在库里还没有账号时生效，
+	// 之后以库为准（后台 /account 可以改）。BRIDGE_ADMIN_RESET=1 时强制用 env 覆盖。
 	AdminUser     string
 	AdminPassword string
+	AdminReset    bool
 	// Secret 是 32 字节主密钥，用于加密机器人 token。
 	Secret []byte
 	// DefaultMode 是新桥的默认接入方式：poll 或 webhook。
@@ -73,6 +75,7 @@ func Load() (*Config, error) {
 		DataDir:       dataDir,
 		AdminUser:     env("BRIDGE_ADMIN_USER", "admin"),
 		AdminPassword: os.Getenv("BRIDGE_ADMIN_PASSWORD"),
+		AdminReset:    os.Getenv("BRIDGE_ADMIN_RESET") == "1",
 		DefaultMode:   env("BRIDGE_MODE", "webhook"),
 		LeaseSeconds:  180,
 		MaxAttempts:   5,

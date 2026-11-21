@@ -43,10 +43,8 @@ func main() {
 	}
 	defer st.Close()
 
-	// 管理员密码以环境变量为准：改了环境变量重启即生效。
-	now := time.Now().Unix()
-	if err := st.UpsertAdmin(context.Background(), cfg.AdminUser,
-		secret.HashPassword(cfg.AdminPassword), now); err != nil {
+	// 账号以库为准：env 只在首次创建（或 BRIDGE_ADMIN_RESET=1 显式重置）时生效。
+	if err := bootstrapAdmin(context.Background(), st, cfg); err != nil {
 		log.Fatalf("初始化管理员失败: %v", err)
 	}
 
@@ -166,4 +164,28 @@ func main() {
 	// 停掉所有"输入中"保活，否则进程走了 Telegram 那边还在转圈。
 	svc.Typing.StopAll()
 	os.Exit(0)
+}
+
+// bootstrapAdmin 决定这次启动要不要动管理员账号。
+//
+// 后台开放了改密码，所以 env 不能继续"每次启动都覆盖"——那样网页上刚改的
+// 密码下次重启就没了。现在：库里没有这个账号才用 env 建；BRIDGE_ADMIN_RESET=1
+// 才用 env 强制覆盖（忘记密码时的唯一退路）。
+func bootstrapAdmin(ctx context.Context, st *store.Store, cfg *config.Config) error {
+	now := time.Now().Unix()
+	hash := secret.HashPassword(cfg.AdminPassword)
+	if cfg.AdminReset {
+		log.Printf("BRIDGE_ADMIN_RESET=1：用环境变量覆盖账号 %s 的密码", cfg.AdminUser)
+		return st.UpsertAdmin(ctx, cfg.AdminUser, hash, now)
+	}
+	if err := st.EnsureAdmin(ctx, cfg.AdminUser, hash, now); err != nil {
+		return err
+	}
+	// 账号在、但 env 里的密码跟库里的不一致，基本就是网页上改过密码。
+	// 这里不改库，只留一句提示，免得"我改了 env 怎么没生效"变成无头案。
+	if a, err := st.GetAdmin(ctx, cfg.AdminUser); err == nil && !secret.VerifyPassword(a.PasswordHash, cfg.AdminPassword) {
+		log.Printf("提示：环境变量里的密码与库中 %s 的密码不一致，已按库中的为准；"+
+			"要强制用 env 覆盖请设 BRIDGE_ADMIN_RESET=1 再重启", cfg.AdminUser)
+	}
+	return nil
 }

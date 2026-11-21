@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"muse-bridge/internal/domain"
 	"muse-bridge/internal/secret"
@@ -67,6 +69,10 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /conversations/{id}", s.withAdmin(s.handleConversation))
 	mux.HandleFunc("GET /export", s.withAdmin(s.handleExportPage))
 	mux.HandleFunc("POST /jobs/{id}/replay", s.withAdmin(s.handleReplay))
+
+	// 账号：改用户名和密码。只有登录后能进，改密码要求先验当前密码。
+	mux.HandleFunc("GET /account", s.withAdmin(s.handleAccountPage))
+	mux.HandleFunc("POST /account", s.withAdmin(s.handleAccountSave))
 
 	// 后台唯一的静态资源：复制按钮用的一小段脚本。
 	// 以前后台完全不带 JS（CSP 里 script-src 是禁死的），但"一键复制"
@@ -232,6 +238,114 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+// ---------- 账号 ----------
+
+type accountData struct {
+	Username string
+}
+
+// currentAdmin 取当前的后台账号。
+//
+// 表结构按多人预留了，但目前没有"新建账号"的入口，实际只有一行：
+// 优先认配置里的用户名，改名之后它就对不上了，退回最早的那一行。
+func (s *Server) currentAdmin(ctx context.Context) (*store.Admin, error) {
+	if a, err := s.st.GetAdmin(ctx, s.cfg.AdminUser); err == nil {
+		return a, nil
+	}
+	all, err := s.st.ListAdmins(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return nil, store.ErrNotFound
+	}
+	return all[0], nil
+}
+
+func (s *Server) handleAccountPage(w http.ResponseWriter, r *http.Request) {
+	a, err := s.currentAdmin(r.Context())
+	if err != nil {
+		http.Error(w, "账号不存在", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, r, "account.html", pageData{
+		Title: "账号", Active: "account", Admin: true,
+		Data: accountData{Username: a.Username},
+	})
+}
+
+// handleAccountSave 改用户名和密码。
+//
+// 改密码要求先验当前密码：这是页面上唯一能凭会话直接换掉钥匙的操作，
+// 万一 cookie 被顺走，至少不能直接把主人锁在门外。
+func (s *Server) handleAccountSave(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	ctx := r.Context()
+	a, err := s.currentAdmin(ctx)
+	if err != nil {
+		http.Error(w, "账号不存在", http.StatusInternalServerError)
+		return
+	}
+	if !secret.VerifyPassword(a.PasswordHash, r.PostFormValue("current_password")) {
+		s.flash(w, r, "err", "当前密码不对，没有做任何修改")
+		return
+	}
+	username := strings.TrimSpace(r.PostFormValue("username"))
+	if err := validateAdminUsername(username); err != nil {
+		s.flash(w, r, "err", err.Error())
+		return
+	}
+	newPass := r.PostFormValue("password")
+	changedPass := newPass != ""
+	if changedPass {
+		if len(newPass) < 8 {
+			s.flash(w, r, "err", "新密码至少 8 位")
+			return
+		}
+		if newPass != r.PostFormValue("password2") {
+			s.flash(w, r, "err", "两次输入的新密码不一致")
+			return
+		}
+	}
+	hash := a.PasswordHash
+	if changedPass {
+		hash = secret.HashPassword(newPass)
+	}
+	if err := s.st.UpdateAdmin(ctx, a.ID, username, hash); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			s.flash(w, r, "err", "这个用户名已经被占用了")
+			return
+		}
+		s.flash(w, r, "err", "保存失败："+err.Error())
+		return
+	}
+	if changedPass {
+		// 密码变了，所有旧 cookie 一律作废，包括当前这个。
+		s.st.DeleteAllSessions(ctx)
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
+		setFlash(w, "ok", "密码已更新，请用新密码登录")
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	setFlash(w, "ok", "已保存")
+	http.Redirect(w, r, "/account", http.StatusSeeOther)
+}
+
+// validateAdminUsername 只挡明显不合理的输入。
+// 中文是允许的：这台机器的使用者写中文比拼音顺手。
+func validateAdminUsername(name string) error {
+	if name == "" {
+		return errors.New("用户名不能为空")
+	}
+	if n := utf8.RuneCountInString(name); n < 2 || n > 32 {
+		return errors.New("用户名长度要在 2–32 个字符之间")
+	}
+	if strings.ContainsAny(name, " \t\r\n/\\") {
+		return errors.New("用户名里不能有空格或斜杠")
+	}
+	return nil
+}
+
 // ---------- 总览 ----------
 
 type bridgeRow struct {
@@ -284,7 +398,6 @@ func (s *Server) todayMessages(ctx context.Context) int {
 
 type newBridgeData struct {
 	DefaultMode string
-	PublicURL   string
 }
 
 var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}$`)
@@ -292,7 +405,7 @@ var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}$`)
 func (s *Server) handleNewBridgePage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "bridge_new.html", pageData{
 		Title: "新建桥", Active: "new", Admin: true,
-		Data: newBridgeData{DefaultMode: s.cfg.DefaultMode, PublicURL: s.cfg.PublicURL},
+		Data: newBridgeData{DefaultMode: s.cfg.DefaultMode},
 	})
 }
 
@@ -303,7 +416,6 @@ func (s *Server) handleCreateBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.PostFormValue("name"))
-	slug := strings.TrimSpace(r.PostFormValue("slug"))
 	botToken := strings.TrimSpace(r.PostFormValue("bot_token"))
 	allowed, err := parseAllowedUserIDs(r.PostFormValue("allowed_user_ids"))
 	if err != nil {
@@ -314,8 +426,8 @@ func (s *Server) handleCreateBridge(w http.ResponseWriter, r *http.Request) {
 	if mode != "poll" {
 		mode = "webhook"
 	}
-	if name == "" || !slugRe.MatchString(slug) || botToken == "" {
-		s.flash(w, r, "err", "名字、slug、机器人 token 都必须填写；slug 只能是小写字母、数字和连字符")
+	if name == "" || botToken == "" {
+		s.flash(w, r, "err", "桥名字和机器人 token 都必须填写")
 		return
 	}
 
@@ -334,15 +446,29 @@ func (s *Server) handleCreateBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.svc.Now()
+	// slug 不再让人填：它只是 webhook 的路径段，用户没有理由关心它，
+	// 让人先想一个不重名的 slug 纯属添堵。随机生成，撞名了再摇一次。
 	b := &store.Bridge{
-		Slug: slug, Name: name, BotTokenEnc: enc, BotID: info.ID, BotUsername: info.Username,
+		Slug: secret.RandomSlug(10), Name: name, BotTokenEnc: enc, BotID: info.ID, BotUsername: info.Username,
 		WebhookSecret: secret.RandomHex(24), AllowedUserIDs: allowed, Mode: mode,
 		Status: "active", CreatedAt: now, UpdatedAt: now,
 	}
-	id, err := s.st.CreateBridge(ctx, b)
-	if err != nil {
-		s.flash(w, r, "err", "创建失败："+err.Error())
-		return
+	var id int64
+	for attempt := 0; ; attempt++ {
+		if !slugRe.MatchString(b.Slug) {
+			s.flash(w, r, "err", "生成的 slug 不合法："+b.Slug)
+			return
+		}
+		id, err = s.st.CreateBridge(ctx, b)
+		if err == nil {
+			break
+		}
+		// 只有撞名才值得重摇；其它错误重试多少次都一样。
+		if attempt >= 5 || !strings.Contains(err.Error(), "UNIQUE") {
+			s.flash(w, r, "err", "创建失败："+err.Error())
+			return
+		}
+		b.Slug = secret.RandomSlug(10)
 	}
 	b.ID = id
 
@@ -360,12 +486,12 @@ func (s *Server) handleCreateBridge(w http.ResponseWriter, r *http.Request) {
 	if mode == "webhook" && s.cfg.PublicURL != "" {
 		whCtx, whCancel := context.WithTimeout(ctx, 20*time.Second)
 		defer whCancel()
-		if err := client.SetWebhook(whCtx, s.cfg.PublicURL+"/tg/"+slug, b.WebhookSecret); err != nil {
+		if err := client.SetWebhook(whCtx, s.cfg.PublicURL+"/tg/"+b.Slug, b.WebhookSecret); err != nil {
 			setFlash(w, "err", "webhook 注册失败（"+err.Error()+"），可在详情页重试；也可以改用长轮询。")
 		}
 	}
 	// 用 303 跳过去而不是直接把详情页渲染在这个 POST 上：
-	// 否则刷新一次就重新提交一遍建桥表单，第二次只会得到「slug 已被占用」。
+	// 否则刷新一次就重新提交一遍建桥表单，第二次会多建一座桥（还要多调一次 getMe）。
 	// 令牌已经存了密文，跳转后详情页照样能显示，不再依赖"只此一次"。
 	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10)+"?created=1", http.StatusSeeOther)
 }

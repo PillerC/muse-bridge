@@ -1,0 +1,24 @@
+{{template "head" .}}
+<h1>账号</h1>
+<p class="sub">这里是登录后台用的账号。改密码要用新密码重新登录。</p>
+
+<form class="card" method="post" action="/account">
+  <label>用户名</label>
+  <input type="text" name="username" value="{{.Data.Username}}" required autocomplete="username">
+
+  <label>当前密码</label>
+  <input type="password" name="current_password" required autocomplete="current-password">
+  <p class="sub" style="margin:6px 0 0">改任何一项都要先验当前密码，免得会话被别人拿去直接换掉钥匙。</p>
+
+  <label>新密码（留空表示不改）</label>
+  <input type="password" name="password" autocomplete="new-password">
+
+  <label>再输一次新密码</label>
+  <input type="password" name="password2" autocomplete="new-password">
+  <p class="sub" style="margin:6px 0 0">至少 8 位。改完之后所有设备上的登录都会失效，包括当前这个。</p>
+
+  <div class="row" style="margin-top:18px">
+    <button class="btn primary">保存</button>
+  </div>
+</form>
+{{template "foot" .}}

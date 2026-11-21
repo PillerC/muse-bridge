@@ -55,6 +55,20 @@
   function init() {
     var boxes = document.querySelectorAll('textarea.copybox');
     for (var i = 0; i < boxes.length; i++) autosize(boxes[i]);
+    bindFolds();
+  }
+
+  /* 折叠里的 textarea 在 display:none 状态下 scrollHeight 是 0，
+     按这个值撑高，展开后只剩两像素。所以在每次展开时重新量一次。 */
+  function bindFolds() {
+    var folds = document.querySelectorAll('details.fold');
+    for (var i = 0; i < folds.length; i++) {
+      folds[i].addEventListener('toggle', function () {
+        if (!this.open) return;
+        var ta = this.querySelector('textarea.copybox');
+        if (ta) autosize(ta);
+      });
+    }
   }
 
   if (document.readyState === 'loading') {

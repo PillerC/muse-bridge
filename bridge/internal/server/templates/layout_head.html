@@ -68,6 +68,17 @@
       border-radius:8px;background:#f7f8fa;color:var(--text);resize:vertical;
       font-family:var(--mono);font-size:12.5px;line-height:1.65}
     .copybtn{white-space:nowrap;flex:0 0 auto}
+    /* 提示词很长，默认折叠起来只留一行：多数时候人只是要复制，
+       不需要先读两屏文字。用原生 details，不额外写脚本。 */
+    .fold>summary{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;
+      border:1px solid var(--line);border-radius:8px;background:#fff;
+      font-size:13px;color:var(--accent);cursor:pointer;list-style:none;user-select:none}
+    .fold>summary::-webkit-details-marker{display:none}
+    .fold>summary:hover{background:var(--bg)}
+    .fold .fold-act{color:var(--muted);font-size:12px}
+    .fold .fold-act::before{content:"· 展开"}
+    .fold[open] .fold-act::before{content:"· 收起"}
+    .fold[open]>summary{margin-bottom:7px}
     label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}
     input[type=text],input[type=password],input[type=search],select,textarea{
       width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-size:14px;
@@ -99,7 +110,6 @@
     .list li{padding:10px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center}
     .list li:last-child{border-bottom:0}
     .list .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    footer{color:var(--muted);font-size:12px;text-align:center;padding:20px 0 40px}
 
     @media(max-width:760px){
       .split{grid-template-columns:1fr}
@@ -138,7 +148,6 @@
       /* 元信息行在手机上本来就长，字号和胶囊再收一点，能省掉两三行 */
       .meta{font-size:10.5px;line-height:1.5}
       .meta .pill{font-size:10.5px;padding:1px 6px}
-      footer{padding:16px 0 28px}
 
       /* 提示词是只读的，不参与上面那条 16px 防缩放规则：
          真按 16px 排，一段说明能占满两屏。 */
@@ -155,6 +164,7 @@
       <a href="/" class="{{if eq .Active "dashboard"}}on{{end}}">总览</a>
       <a href="/bridges/new" class="{{if eq .Active "new"}}on{{end}}">新建桥</a>
       <a href="/export" class="{{if eq .Active "export"}}on{{end}}">导出</a>
+      <a href="/account" class="{{if eq .Active "account"}}on{{end}}">账号</a>
       {{if .Admin}}<form method="post" action="/logout"><button class="btn" style="padding:6px 10px">退出</button></form>{{end}}
     </nav>
   </div>

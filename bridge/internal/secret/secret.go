@@ -100,6 +100,23 @@ func RandomHex(n int) string {
 	return hex.EncodeToString(buf)
 }
 
+// slugAlphabet 去掉了容易看错的 l/1/0/o：slug 会出现在 webhook 地址里，
+// 用户可能要从屏幕上抄下来或者手打，认错一个字符就是 404。
+const slugAlphabet = "abcdefghijkmnpqrstuvwxyz23456789"
+
+// RandomSlug 生成 n 位随机 slug，字符集满足 webhook 路径对 [a-z0-9] 的要求。
+func RandomSlug(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		panic("crypto/rand 不可用: " + err.Error())
+	}
+	out := make([]byte, n)
+	for i, b := range buf {
+		out[i] = slugAlphabet[int(b)%len(slugAlphabet)]
+	}
+	return string(out)
+}
+
 // ---------- 管理员密码 ----------
 
 const pbkdf2Iter = 210000

@@ -42,7 +42,10 @@
     <p class="lbl">① 接入提示词（发给 Muse）</p>
     <button type="button" class="btn copybtn" data-copy="prompt">复制提示词</button>
   </div>
-  <textarea class="copybox" id="prompt" readonly spellcheck="false">{{.Data.Prompt}}</textarea>
+  <details class="fold">
+    <summary>提示词全文<span class="fold-act"></span></summary>
+    <textarea class="copybox" id="prompt" readonly spellcheck="false">{{.Data.Prompt}}</textarea>
+  </details>
 
   <div class="copyhead">
     <p class="lbl">② 桥令牌
