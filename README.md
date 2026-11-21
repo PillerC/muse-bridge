@@ -3,7 +3,7 @@
 Muse ↔ Telegram 的多租户通信中枢。一座桥 = 一个 Telegram 机器人 + 一个 Muse 接入点，
 消息双向落库，管理后台可以查记录、导出、看队列、重放死信。
 
-自建、单进程、单文件二进制 + 一个 SQLite。常驻内存约 10MB，磁盘约 20MB。
+自建、单进程、单文件二进制 + 一个 SQLite。常驻内存约 50MB，磁盘约 20MB。
 
 ```text
 Telegram ──webhook（带 secret）──► ┌─────────────────────────┐
@@ -77,12 +77,15 @@ rc-service muse-bridge start
 
 后台就是域名首页 `https://<域名>/`，用环境变量里的账号密码登录。
 
-```bash
+```text
 https://bridge.example.com/
-# 另有一个只绑 127.0.0.1:8080 的兜底入口，TLS 出问题时可用 SSH 隧道访问
 ```
 
-填三样东西：桥名字、slug、机器人 token（@BotFather 拿）。点创建后桥会：
+进程同时监听 `BRIDGE_ADDR`（默认 `127.0.0.1:8080`），域名和证书出问题时
+可以 `ssh -L 8080:127.0.0.1:8080` 走隧道直接访问。
+
+填两样东西：桥名字、机器人 token（@BotFather 拿）。slug 由服务端随机生成，
+不让人填——它只出现在 webhook 地址里，手填只会制造拼错和撞名的机会。点创建后桥会：
 
 1. 调 `getMe` 校验 token，顺手记下 bot 的 id 和 username；
 2. 用 `BRIDGE_SECRET` 加密 token 存库，之后任何界面都不回显；

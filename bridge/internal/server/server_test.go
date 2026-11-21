@@ -1204,10 +1204,10 @@ func TestAccountChangeUsernameAndPassword(t *testing.T) {
 	}
 
 	// 只改用户名。
-	if w := post("current_password=pw&username=goojia"); w.Code != http.StatusSeeOther {
+	if w := post("current_password=pw&username=alice"); w.Code != http.StatusSeeOther {
 		t.Fatalf("改名后应 303，实际 %d", w.Code)
 	}
-	if login("goojia", "pw") != http.StatusSeeOther {
+	if login("alice", "pw") != http.StatusSeeOther {
 		t.Fatal("改名后应能用新用户名登录")
 	}
 	if login("admin", "pw") != http.StatusOK { // 200 = 停在登录页，没有 cookie
@@ -1215,21 +1215,21 @@ func TestAccountChangeUsernameAndPassword(t *testing.T) {
 	}
 
 	// 密码太短要被挡回来。
-	if w := post("current_password=pw&username=goojia&password=short&password2=short"); w.Code != http.StatusSeeOther {
+	if w := post("current_password=pw&username=alice&password=short&password2=short"); w.Code != http.StatusSeeOther {
 		t.Fatalf("应 303，实际 %d", w.Code)
 	}
-	if login("goojia", "pw") != http.StatusSeeOther {
+	if login("alice", "pw") != http.StatusSeeOther {
 		t.Fatal("密码没改成时旧密码应继续有效")
 	}
 
 	// 两次输入不一致同样挡回来。
-	post("current_password=pw&username=goojia&password=abcdefgh&password2=abcdefgi")
-	if login("goojia", "pw") != http.StatusSeeOther {
+	post("current_password=pw&username=alice&password=abcdefgh&password2=abcdefgi")
+	if login("alice", "pw") != http.StatusSeeOther {
 		t.Fatal("两次不一致时不该改密码")
 	}
 
 	// 正常改密码：旧会话全部作废，跳登录页。
-	if w := post("current_password=pw&username=goojia&password=newpass123&password2=newpass123"); w.Code != http.StatusSeeOther {
+	if w := post("current_password=pw&username=alice&password=newpass123&password2=newpass123"); w.Code != http.StatusSeeOther {
 		t.Fatalf("改密码后应 303，实际 %d", w.Code)
 	}
 	var sessions int
@@ -1239,10 +1239,10 @@ func TestAccountChangeUsernameAndPassword(t *testing.T) {
 	if sessions != 0 {
 		t.Fatalf("改密码后应清空所有会话，实际还剩 %d 个", sessions)
 	}
-	if login("goojia", "newpass123") != http.StatusSeeOther {
+	if login("alice", "newpass123") != http.StatusSeeOther {
 		t.Fatal("应能用新密码登录")
 	}
-	if login("goojia", "pw") != http.StatusOK {
+	if login("alice", "pw") != http.StatusOK {
 		t.Fatal("旧密码应失效")
 	}
 }

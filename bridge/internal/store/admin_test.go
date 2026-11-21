@@ -18,14 +18,14 @@ func TestEnsureAdminKeepsExistingPassword(t *testing.T) {
 	}
 	defer st.Close()
 
-	if err := st.EnsureAdmin(ctx, "goojia", secret.HashPassword("first"), 1); err != nil {
+	if err := st.EnsureAdmin(ctx, "alice", secret.HashPassword("first"), 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.EnsureAdmin(ctx, "goojia", secret.HashPassword("second"), 2); err != nil {
+	if err := st.EnsureAdmin(ctx, "alice", secret.HashPassword("second"), 2); err != nil {
 		t.Fatal(err)
 	}
 
-	a, err := st.GetAdmin(ctx, "goojia")
+	a, err := st.GetAdmin(ctx, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +45,10 @@ func TestEnsureAdminKeepsExistingPassword(t *testing.T) {
 	}
 
 	// 显式重置（BRIDGE_ADMIN_RESET=1 走的是 UpsertAdmin）仍然要能覆盖。
-	if err := st.UpsertAdmin(ctx, "goojia", secret.HashPassword("second"), 3); err != nil {
+	if err := st.UpsertAdmin(ctx, "alice", secret.HashPassword("second"), 3); err != nil {
 		t.Fatal(err)
 	}
-	a, _ = st.GetAdmin(ctx, "goojia")
+	a, _ = st.GetAdmin(ctx, "alice")
 	if !secret.VerifyPassword(a.PasswordHash, "second") {
 		t.Fatal("UpsertAdmin 应强制覆盖密码")
 	}
@@ -66,13 +66,13 @@ func TestUpdateAdminRenamesAndRehashes(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, _ := st.GetAdmin(ctx, "admin")
-	if err := st.UpdateAdmin(ctx, a.ID, "goojia", secret.HashPassword("newpw")); err != nil {
+	if err := st.UpdateAdmin(ctx, a.ID, "alice", secret.HashPassword("newpw")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.GetAdmin(ctx, "admin"); err == nil {
 		t.Fatal("改名后旧用户名不该还能查到")
 	}
-	b, err := st.GetAdmin(ctx, "goojia")
+	b, err := st.GetAdmin(ctx, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
