@@ -200,6 +200,29 @@ func (c *Client) DeleteWebhook(ctx context.Context) error {
 	return c.Call(ctx, "deleteWebhook", map[string]any{"drop_pending_updates": false}, nil)
 }
 
+// WebhookInfo 是 getWebhookInfo 的返回。
+//
+// 排查"消息没进来"时最有用的是 PendingCount 和 LastErrorMessage：
+// 前者说明 Telegram 打了但桥回了非 2xx，后者通常是证书或 404。
+type WebhookInfo struct {
+	URL              string `json:"url"`
+	HasCustomCert    bool   `json:"has_custom_certificate"`
+	PendingCount     int    `json:"pending_update_count"`
+	LastErrorDate    int64  `json:"last_error_date"`
+	LastErrorMessage string `json:"last_error_message"`
+	MaxConnections   int    `json:"max_connections"`
+	IPAddress        string `json:"ip_address"`
+}
+
+// GetWebhookInfo 查询 Telegram 侧记录的 webhook 状态。
+func (c *Client) GetWebhookInfo(ctx context.Context) (*WebhookInfo, error) {
+	var info WebhookInfo
+	if err := c.Call(ctx, "getWebhookInfo", nil, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
 // Update 是 getUpdates 的一页。
 type UpdatesPage struct {
 	Updates []Update

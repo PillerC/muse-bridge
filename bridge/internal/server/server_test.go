@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -155,6 +157,23 @@ func (f *fixture) do(t *testing.T, method, path, body string, headers map[string
 	w := httptest.NewRecorder()
 	f.public.ServeHTTP(w, req)
 	return w
+}
+
+// adminCookie 登录后台并返回会话 cookie，供需要登录的测试复用。
+func (f *fixture) adminCookie(t *testing.T) *http.Cookie {
+	t.Helper()
+	form := "username=admin&password=pw"
+	req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "mb_admin" {
+			return c
+		}
+	}
+	t.Fatal("登录未下发会话 cookie")
+	return nil
 }
 
 func (f *fixture) auth() map[string]string {
@@ -615,5 +634,51 @@ func TestLoginRateLimitByIPNotPort(t *testing.T) {
 	w := try("50000", "pw")
 	if !strings.Contains(w.Body.String(), "尝试次数过多") {
 		t.Fatalf("同 IP 换端口应仍受限流约束，实际: %.200s", w.Body.String())
+	}
+}
+
+// 删除必须走服务端确认页：后台 CSP 禁用了 script-src，
+// onsubmit="return confirm(...)" 会被浏览器直接丢弃，删除会变成一击即中。
+func TestDeleteConfirmPageRenders(t *testing.T) {
+	f := newFixture(t)
+	req := httptest.NewRequest("GET", "/admin/bridges/1/delete", nil)
+	req.AddCookie(f.adminCookie(t))
+	w := httptest.NewRecorder()
+	f.public.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("确认页应 200，实际 %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "确认永久删除") || !strings.Contains(body, "不可恢复") {
+		t.Fatalf("确认页内容异常: %.300s", body)
+	}
+	if strings.Contains(body, "onsubmit") {
+		t.Fatal("确认页不应依赖内联事件处理器")
+	}
+}
+
+// 模板里不能出现内联脚本或内联事件处理器。
+//
+// 后台的 CSP 是 default-src 'none' 且没有 script-src，
+// 任何 <script> 或 on*="..." 都会被静默丢弃——功能不会报错，
+// 只会莫名其妙不生效。这条测试守住这个约束。
+func TestTemplatesHaveNoInlineScript(t *testing.T) {
+	entries, err := os.ReadDir("templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inline := regexp.MustCompile(`(?i)<script|\son[a-z]+\s*=\s*"`)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("templates", e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loc := inline.FindIndex(data); loc != nil {
+			t.Fatalf("%s 含有内联脚本/事件处理器（偏移 %d），会被 CSP 挡掉: %q",
+				e.Name(), loc[0], string(data[max(0, loc[0]-40):loc[0]+60]))
+		}
 	}
 }

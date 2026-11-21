@@ -50,7 +50,9 @@ func (s *Server) Admin() http.Handler {
 	mux.HandleFunc("POST /admin/bridges/{id}/tokens", s.withAdmin(s.handleNewToken))
 	mux.HandleFunc("POST /admin/bridges/{id}/tokens/{tid}/revoke", s.withAdmin(s.handleRevokeToken))
 	mux.HandleFunc("POST /admin/bridges/{id}/webhook", s.withAdmin(s.handleWebhookAdmin))
+	mux.HandleFunc("GET /admin/bridges/{id}/webhook-status", s.withAdmin(s.handleWebhookStatus))
 	mux.HandleFunc("POST /admin/bridges/{id}/delete", s.withAdmin(s.handleDeleteBridge))
+	mux.HandleFunc("GET /admin/bridges/{id}/delete", s.withAdmin(s.handleDeleteConfirm))
 
 	mux.HandleFunc("GET /admin/conversations/{id}", s.withAdmin(s.handleConversation))
 	mux.HandleFunc("GET /admin/export", s.withAdmin(s.handleExportPage))
@@ -485,6 +487,59 @@ func (s *Server) handleWebhookAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+// handleWebhookStatus 返回 Telegram 侧的 webhook 实况。
+//
+// 排查"消息没进来"时分三种情况：
+//   - LastErrorMessage 非空：Telegram 打了但桥返回了错误，多半是证书或路径不对；
+//   - PendingCount > 0：桥在收但处理失败，Telegram 一直重投；
+//   - 都为空且 URL 为空：setWebhook 没生效，Telegram 根本不知道往哪打。
+func (s *Server) handleWebhookStatus(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	b, err := s.st.GetBridgeByID(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "桥不存在")
+		return
+	}
+	client, err := s.svc.Client(r.Context(), b)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "解密机器人 token 失败："+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	info, err := client.GetWebhookInfo(ctx)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "调用 getWebhookInfo 失败："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"expected_url":     s.cfg.PublicURL + "/tg/" + b.Slug,
+		"url":              info.URL,
+		"url_matches":      info.URL == s.cfg.PublicURL+"/tg/"+b.Slug,
+		"pending_count":    info.PendingCount,
+		"last_error":       info.LastErrorMessage,
+		"last_error_epoch": info.LastErrorDate,
+		"max_connections":  info.MaxConnections,
+	})
+}
+
+// handleDeleteConfirm 渲染删除确认页。
+//
+// 用服务端确认页而不是 onsubmit="return confirm(...)"：
+// 后台的 CSP 里 script-src 是禁用的，内联事件处理器会被浏览器丢弃，
+// 那样"确认删除"会退化成点一下就直接删。删除是不可逆操作，
+// 不能依赖一个可能被 CSP 静默挡掉的对话框。
+func (s *Server) handleDeleteConfirm(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	b, err := s.st.GetBridgeByID(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.render(w, r, "confirm_delete.html", pageData{Title: "删除桥", Data: bridgeDetailData{Bridge: b}})
 }
 
 func (s *Server) handleDeleteBridge(w http.ResponseWriter, r *http.Request) {

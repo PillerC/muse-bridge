@@ -1,0 +1,16 @@
+{{define "confirm_delete.html"}}{{template "head" .}}
+<h1>删除桥</h1>
+
+<div class="card" style="border-color:#f3c7c7">
+  <h2 style="color:var(--err)">确认删除</h2>
+  <p>即将删除 <strong>{{.Data.Bridge.Name}}</strong>（<code>{{.Data.Bridge.Slug}}</code>）。</p>
+  <p class="sub">
+    该桥的全部会话、消息、令牌、待办任务会一并删除，<strong>不可恢复</strong>。
+    如果只是想停掉它，返回上一页点「暂停」即可，数据都会保留。
+  </p>
+  <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/delete">
+    <button class="btn danger">确认永久删除</button>
+    <a class="btn" href="/admin/bridges/{{.Data.Bridge.ID}}">取消</a>
+  </form>
+</div>
+{{template "foot" .}}{{end}}
