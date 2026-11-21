@@ -1,0 +1,6 @@
+id: "custom.telegram-bot-api"
+title: "Telegram Bot API"
+description: "Send and edit messages as your Telegram bot and check its identity."
+include_in_prompt: false
+require_auth: true
+aliases: ["Telegram Bot"]
