@@ -70,7 +70,8 @@ CREATE TABLE bridges (
   bot_id          INTEGER,
   bot_username    TEXT,
   webhook_secret  TEXT NOT NULL,          -- 随机 48 字符
-  allowed_chat_ids TEXT,                  -- 逗号分隔，空表示不限制
+  allowed_chat_ids TEXT,                  -- 已废弃：v2.2 换成下面这列，见迁移说明
+  allowed_user_ids TEXT,                  -- 逗号分隔的 Telegram 用户 ID，空 = 谁都不收
   status          TEXT NOT NULL DEFAULT 'active',  -- active | paused
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL
@@ -206,7 +207,7 @@ Idempotency-Key: 42-a1b2c3          // 必填，重复提交返回上次结果
 | POST | `/api/auth/login` | 密码登录，失败计入限流 |
 | GET | `/api/bridges` | 桥列表（含机器人用户名、待办数、今日消息数） |
 | POST | `/api/bridges` | 建桥，入参 `{name, bot_token}` |
-| PATCH | `/api/bridges/:id` | 改名、启停、白名单 |
+| PATCH | `/api/bridges/:id` | 改名、启停、允许的用户 ID |
 | POST | `/api/bridges/:id/tokens` | 签发新令牌，明文仅本次返回 |
 | DELETE | `/api/bridges/:id/tokens/:tid` | 吊销令牌 |
 | GET | `/api/bridges/:id/conversations` | 会话列表 |
@@ -238,7 +239,7 @@ Idempotency-Key: 42-a1b2c3          // 必填，重复提交返回上次结果
    并区分"重复"与"约束失败"——后者必须报错，不能当成去重静默吞掉。
 3. 写 `conversations`（upsert）与 `messages(direction=in)`。
 4. `classify()` 判定是否回复：私聊全回；群/超群仅 @ 或引用机器人；
-   机器人自己的消息不回；channel 与 edit 忽略。白名单不通过则不建 job。
+   机器人自己的消息不回；channel 与 edit 忽略。发送者不在名单里则不入库、不建 job（名单为空表示谁都不收）。
 5. 需要回复则建 `jobs(status=pending)`。
 
 出站：
@@ -267,7 +268,7 @@ Idempotency-Key: 42-a1b2c3          // 必填，重复提交返回上次结果
 1. **登录**
 2. **桥列表**：卡片式，显示机器人 @用户名、待办数、今日收发条数、状态
 3. **建桥向导**：单页表单，成功后展示接入信息（含一键复制）
-4. **桥详情**：基本信息、白名单编辑、令牌列表（签发 / 吊销 / 最后使用时间）、
+4. **桥详情**：基本信息、允许的用户 ID 编辑（附被拒发送者提示）、令牌列表（签发 / 吊销 / 最后使用时间）、
    暂停开关、webhook 状态
 5. **会话列表**：按最后消息时间倒序，显示群名 / 用户名、消息数、最后一条摘要
 6. **会话详情**：聊天气泡视图，左右区分进出，支持向上翻页、关键字过滤、

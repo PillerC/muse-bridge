@@ -24,12 +24,14 @@ type Service struct {
 	TG     *tg.Factory
 	Now    func() int64
 	Public string // 形如 https://bridge.example.com，用于拼 webhook 地址
+
+	blocked *blockedLog
 }
 
 // NewService 构造服务。
 func NewService(st *store.Store, q *Queue, box *secret.Box, f *tg.Factory, publicURL string) *Service {
 	return &Service{Store: st, Queue: q, Typing: NewTyping(), Box: box, TG: f, Public: publicURL,
-		Now: func() int64 { return time.Now().Unix() }}
+		Now: func() int64 { return time.Now().Unix() }, blocked: newBlockedLog()}
 }
 
 // Client 解出某座桥的机器人 token 并返回客户端。明文只在内存中存在。
@@ -53,8 +55,12 @@ type IngestResult struct {
 
 // IngestUpdate 把一条 Telegram 更新写进聊天流水，并按需建任务。
 //
-// 即使不需要回复也照常入库（needs_reply=0），这样后台能看到完整对话，
-// 也能直接回答"这条消息为什么没触发"。
+// 发送者不在允许列表里的消息直接丢弃：既不写消息也不建 job。
+// 这类消息不属于这座桥的对话，写进去只会让记录页被陌生人刷满，
+// 还会让"收到但没回"看起来像桥坏了。
+//
+// 名单内的消息即使不需要回复也照常入库（needs_reply=0），
+// 这样后台能看到完整对话，也能直接回答"这条消息为什么没触发"。
 func (s *Service) IngestUpdate(ctx context.Context, b *store.Bridge, up *tg.Update, now int64) (IngestResult, error) {
 	m := up.Message
 	if m == nil {
@@ -64,7 +70,12 @@ func (s *Service) IngestUpdate(ctx context.Context, b *store.Bridge, up *tg.Upda
 		return IngestResult{Reason: "no_message"}, nil
 	}
 
-	verdict := Classify(m, Bot{ID: b.BotID, Username: b.BotUsername}, parseIDs(b.AllowedChatIDs))
+	verdict := Classify(m, Bot{ID: b.BotID, Username: b.BotUsername}, parseIDs(b.AllowedUserIDs))
+	switch verdict.Reason {
+	case "no_allowed_users", "no_sender", "user_not_allowed":
+		s.noteBlocked(b, m, now)
+		return IngestResult{Reason: verdict.Reason}, nil
+	}
 	text, kind, hint := m.Content()
 
 	title := m.Chat.Title

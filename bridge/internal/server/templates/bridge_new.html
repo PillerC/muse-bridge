@@ -12,8 +12,13 @@
   <label>机器人 token（从 @BotFather 获取）</label>
   <input type="text" name="bot_token" placeholder="123456789:AA..." required autocomplete="off">
 
-  <label>允许的会话 ID（可选，逗号分隔；留空表示不限制）</label>
-  <input type="text" name="allowed_chat_ids" placeholder="例如：-1001234567890, 12345678">
+  <label>允许的 Telegram 用户 ID（必填，逗号分隔）</label>
+  <input type="text" name="allowed_user_ids" placeholder="例如：123456789" inputmode="numeric" required>
+  <p class="sub" style="margin:6px 0 0">
+    在 Telegram 里私聊 <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>，
+    它回你的那串数字就是你的 ID。只有这些 ID 发来的消息才会被接收并交给 Muse，其他人发的直接丢弃、不入库。
+    多个 ID 用逗号隔开。
+  </p>
 
   <label>收消息方式</label>
   <select name="mode">

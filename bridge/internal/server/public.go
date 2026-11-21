@@ -377,7 +377,11 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message_id": res.MessageID, "queued": res.Queued})
+	// reason 是给人排查用的：被白名单挡下的消息 message_id 为 0，
+	// 光看 ok=true 会以为入库成功。Telegram 不读这个字段，多给一个没有副作用。
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "message_id": res.MessageID, "queued": res.Queued, "reason": res.Reason,
+	})
 }
 
 func intParam(s string, def int) int64 {

@@ -27,16 +27,22 @@ type Verdict struct {
 //
 // 规则：
 //   - 机器人自己发的消息永不回复（防自激循环）；
-//   - 私聊一律回复；
+//   - 发消息的人必须在 allowedUserIDs 里，否则一律不回复、也不入库；
+//   - 列表为空表示谁都不收（fail-closed）。这一条是刻意选的：
+//     桥的另一头是 Muse，放开的代价是陌生人拿你的额度刷；
+//   - 私聊回复；
 //   - 群/超群只回复 @ 本机器人 或 引用本机器人消息；
-//   - channel 等其他类型不回复；
-//   - 配置了白名单时，名单外的会话不回复。
+//   - channel 等其他类型不回复。
+//
+// 白名单按「人」而不是「会话」判断：群里任何成员都可能把机器人拉进来，
+// 按会话放行等于让整个群的人都能触发，只有 @ 与引用才拦得住噪音，
+// 拦不住额度被别人用。
 //
 // 与 v1 的两处修正：
 //  1. mention 用完整用户名边界匹配，`@muse` 不再误命中 `@musebot`；
 //  2. entity 的 offset/length 按 Telegram 规范是 UTF-16 码元，v1 直接拿它切
 //     UTF-8 字符串，遇到 emoji 会错位，这里统一转 UTF-16 再切。
-func Classify(m *tg.Message, bot Bot, allowedChatIDs []int64) Verdict {
+func Classify(m *tg.Message, bot Bot, allowedUserIDs []int64) Verdict {
 	if m == nil {
 		return Verdict{Reason: "no_message"}
 	}
@@ -45,6 +51,19 @@ func Classify(m *tg.Message, bot Bot, allowedChatIDs []int64) Verdict {
 	from := m.From
 	if from != nil && from.IsBot && isSelf(from, bot) {
 		return Verdict{Reason: "self_message"}
+	}
+
+	// 先过身份再谈触发条件：不在名单里连库都不必进，
+	// 否则陌生人可以把你的聊天记录页刷满。
+	if len(allowedUserIDs) == 0 {
+		return Verdict{Reason: "no_allowed_users"}
+	}
+	if from == nil {
+		// 匿名管理员发言、频道身份发言都拿不到真实用户，无法判定，直接丢。
+		return Verdict{Reason: "no_sender"}
+	}
+	if !containsID(allowedUserIDs, from.ID) {
+		return Verdict{Reason: "user_not_allowed"}
 	}
 
 	text := m.Text
@@ -82,10 +101,6 @@ func Classify(m *tg.Message, bot Bot, allowedChatIDs []int64) Verdict {
 	isReplyToBot := false
 	if rt := m.ReplyTo; rt != nil && rt.From != nil && rt.From.IsBot && isSelf(rt.From, bot) {
 		isReplyToBot = true
-	}
-
-	if len(allowedChatIDs) > 0 && !containsID(allowedChatIDs, m.Chat.ID) {
-		return Verdict{IsMention: isMention, IsReplyToBot: isReplyToBot, Reason: "chat_not_allowed"}
 	}
 
 	switch chatType {

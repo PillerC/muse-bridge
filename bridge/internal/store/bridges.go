@@ -21,7 +21,7 @@ type Bridge struct {
 	BotID          int64
 	BotUsername    string
 	WebhookSecret  string
-	AllowedChatIDs string // 逗号分隔，空表示不限制
+	AllowedUserIDs string // 逗号分隔的 Telegram 用户 ID；空表示不接收任何消息
 	Mode           string // poll | webhook
 	LastUpdateID   int64
 	Status         string // active | paused
@@ -45,10 +45,10 @@ type Token struct {
 func (s *Store) CreateBridge(ctx context.Context, b *Bridge) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO bridges (slug, name, bot_token_enc, bot_id, bot_username,
-		                      webhook_secret, allowed_chat_ids, mode, status, created_at, updated_at)
+		                      webhook_secret, allowed_user_ids, mode, status, created_at, updated_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		b.Slug, b.Name, b.BotTokenEnc, b.BotID, b.BotUsername,
-		b.WebhookSecret, b.AllowedChatIDs, b.Mode, b.Status, b.CreatedAt, b.UpdatedAt)
+		b.WebhookSecret, b.AllowedUserIDs, b.Mode, b.Status, b.CreatedAt, b.UpdatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return 0, fmt.Errorf("slug %q 已被占用", b.Slug)
@@ -87,13 +87,13 @@ func (s *Store) ListBridges(ctx context.Context) ([]*Bridge, error) {
 }
 
 const bridgeColumns = `SELECT id, slug, name, bot_token_enc, COALESCE(bot_id,0), COALESCE(bot_username,''),
-       webhook_secret, COALESCE(allowed_chat_ids,''), mode, last_update_id, status, created_at, updated_at
+       webhook_secret, COALESCE(allowed_user_ids,''), mode, last_update_id, status, created_at, updated_at
   FROM bridges`
 
 func (s *Store) scanBridge(row interface{ Scan(...any) error }) (*Bridge, error) {
 	var b Bridge
 	err := row.Scan(&b.ID, &b.Slug, &b.Name, &b.BotTokenEnc, &b.BotID, &b.BotUsername,
-		&b.WebhookSecret, &b.AllowedChatIDs, &b.Mode, &b.LastUpdateID, &b.Status,
+		&b.WebhookSecret, &b.AllowedUserIDs, &b.Mode, &b.LastUpdateID, &b.Status,
 		&b.CreatedAt, &b.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -112,11 +112,11 @@ func (s *Store) UpdateBridgeBot(ctx context.Context, id int64, encToken string, 
 	return err
 }
 
-// UpdateBridgeSettings 更新名字、白名单、模式。
-func (s *Store) UpdateBridgeSettings(ctx context.Context, id int64, name, allowed, mode string, now int64) error {
+// UpdateBridgeSettings 更新名字、允许的用户、模式。
+func (s *Store) UpdateBridgeSettings(ctx context.Context, id int64, name, allowedUsers, mode string, now int64) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE bridges SET name=?, allowed_chat_ids=?, mode=?, updated_at=? WHERE id=?`,
-		name, allowed, mode, now, id)
+		`UPDATE bridges SET name=?, allowed_user_ids=?, mode=?, updated_at=? WHERE id=?`,
+		name, allowedUsers, mode, now, id)
 	return err
 }
 

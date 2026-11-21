@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"muse-bridge/internal/domain"
 	"muse-bridge/internal/secret"
 	"muse-bridge/internal/store"
 )
@@ -317,7 +318,11 @@ func (s *Server) handleCreateBridge(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	slug := strings.TrimSpace(r.PostFormValue("slug"))
 	botToken := strings.TrimSpace(r.PostFormValue("bot_token"))
-	allowed := strings.TrimSpace(r.PostFormValue("allowed_chat_ids"))
+	allowed, err := parseAllowedUserIDs(r.PostFormValue("allowed_user_ids"))
+	if err != nil {
+		s.flash(w, r, "err", err.Error())
+		return
+	}
 	mode := r.PostFormValue("mode")
 	if mode != "poll" {
 		mode = "webhook"
@@ -344,7 +349,7 @@ func (s *Server) handleCreateBridge(w http.ResponseWriter, r *http.Request) {
 	now := s.svc.Now()
 	b := &store.Bridge{
 		Slug: slug, Name: name, BotTokenEnc: enc, BotID: info.ID, BotUsername: info.Username,
-		WebhookSecret: secret.RandomHex(24), AllowedChatIDs: allowed, Mode: mode,
+		WebhookSecret: secret.RandomHex(24), AllowedUserIDs: allowed, Mode: mode,
 		Status: "active", CreatedAt: now, UpdatedAt: now,
 	}
 	id, err := s.st.CreateBridge(ctx, b)
@@ -381,6 +386,7 @@ type bridgeDetailData struct {
 	BaseURL       string
 	WebhookURL    string
 	NewToken      string
+	Blocked       *domain.BlockedNotice
 }
 
 func (s *Server) handleBridgeDetail(w http.ResponseWriter, r *http.Request) {
@@ -407,12 +413,18 @@ func (s *Server) renderBridge(w http.ResponseWriter, r *http.Request, b *store.B
 	if s.cfg.PublicURL != "" {
 		wh = s.cfg.PublicURL + "/tg/" + b.Slug
 	}
+	// 最近一条被白名单拦下的消息只活在内存里，重启后没有就没有了。
+	// 它对"填错 ID 所以毫无反应"这种情形是唯一的可见线索。
+	var blocked *domain.BlockedNotice
+	if n, ok := s.svc.BlockedNotice(b.ID); ok {
+		blocked = &n
+	}
 	s.render(w, r, "bridge_detail.html", pageData{
 		Title: b.Name, Active: "dashboard", Admin: true,
 		Flash: flashMsg, FlashKind: "err",
 		Data: bridgeDetailData{
 			Bridge: b, Tokens: tokens, Conversations: convs, DeadJobs: dead,
-			BaseURL: base, WebhookURL: wh, NewToken: newToken,
+			BaseURL: base, WebhookURL: wh, NewToken: newToken, Blocked: blocked,
 		},
 	})
 }
@@ -421,7 +433,11 @@ func (s *Server) handleBridgeSettings(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	_ = r.ParseForm()
 	name := strings.TrimSpace(r.PostFormValue("name"))
-	allowed := strings.TrimSpace(r.PostFormValue("allowed_chat_ids"))
+	allowed, err := parseAllowedUserIDs(r.PostFormValue("allowed_user_ids"))
+	if err != nil {
+		s.flashToBridge(w, r, id, err.Error())
+		return
+	}
 	mode := r.PostFormValue("mode")
 	if mode != "poll" {
 		mode = "webhook"
@@ -574,6 +590,7 @@ func (s *Server) handleDeleteBridge(w http.ResponseWriter, r *http.Request) {
 		s.flashToBridge(w, r, id, "删除失败："+err.Error())
 		return
 	}
+	s.svc.ForgetBlocked(id)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

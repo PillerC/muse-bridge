@@ -41,7 +41,12 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("建表失败: %w", err)
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	if err := s.migrate(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("升级表结构失败: %w", err)
+	}
+	return s, nil
 }
 
 // Close 关闭连接。

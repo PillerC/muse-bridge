@@ -17,7 +17,10 @@ CREATE TABLE IF NOT EXISTS bridges (
   bot_id          INTEGER,
   bot_username    TEXT,
   webhook_secret  TEXT    NOT NULL,
-  allowed_chat_ids TEXT,
+  -- 允许使用这座桥的 Telegram 用户 ID，逗号分隔。
+  -- 存的是"发消息的人"（@userinfobot 给出的那个数字），不是会话 ID：
+  -- 群里谁 @ 机器人都能触发太危险，空的含义也从"不限制"改成了"谁都不收"。
+  allowed_user_ids TEXT,
   mode            TEXT    NOT NULL DEFAULT 'poll',
   last_update_id  INTEGER NOT NULL DEFAULT 0,
   status          TEXT    NOT NULL DEFAULT 'active',

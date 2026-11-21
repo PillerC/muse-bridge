@@ -8,6 +8,24 @@
 </p>
 {{end}}
 
+{{if not .Data.Bridge.AllowedUserIDs}}
+<div class="card" style="border-color:#f3c7c7;background:#fff7f7">
+  <h2>还没配置用户 ID</h2>
+  <p class="sub" style="margin:0">这座桥现在不接收任何消息。填上允许使用的 Telegram 用户 ID 之后才会开始收。</p>
+</div>
+{{end}}
+
+{{with .Data.Blocked}}
+<div class="card" style="border-color:#f0d48a;background:#fffcf2">
+  <h2>刚拦下一条消息</h2>
+  <p class="sub" style="margin:0 0 6px">
+    {{ts .At}} 收到{{if .Name}}{{.Name}}{{else}}未知用户{{end}}{{if .Username}}（@{{.Username}}）{{end}}的消息，
+    因为{{if .UserID}}用户 ID <code>{{.UserID}}</code> {{end}}不在允许列表里，已丢弃、没有入库。
+  </p>
+  <p class="sub" style="margin:0">如果这就是你，把{{if .UserID}} <code>{{.UserID}}</code> {{else}}上面的 ID {{end}}填进下面的设置保存即可。</p>
+</div>
+{{end}}
+
 {{if .Data.NewToken}}
 <div class="card" style="border-color:#bfd3ff;background:var(--accent-weak)">
   <h2>新令牌（只显示这一次）</h2>
@@ -39,8 +57,12 @@
     <form method="post" action="/bridges/{{.Data.Bridge.ID}}/settings">
       <label>名字</label>
       <input type="text" name="name" value="{{.Data.Bridge.Name}}" required>
-      <label>允许的会话 ID（留空不限制）</label>
-      <input type="text" name="allowed_chat_ids" value="{{.Data.Bridge.AllowedChatIDs}}">
+      <label>允许的 Telegram 用户 ID</label>
+      <input type="text" name="allowed_user_ids" value="{{.Data.Bridge.AllowedUserIDs}}" inputmode="numeric" required>
+      <p class="sub" style="margin:6px 0 0">
+        在 Telegram 里私聊 <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
+        获取你的数字 ID；多个用逗号隔开。只有这些 ID 发来的消息才会被接收，其他人发的直接丢弃。
+      </p>
       <label>收消息方式</label>
       <select name="mode">
         <option value="webhook" {{if eq .Data.Bridge.Mode "webhook"}}selected{{end}}>webhook</option>

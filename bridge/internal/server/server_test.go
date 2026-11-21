@@ -133,7 +133,7 @@ func newFixture(t *testing.T) *fixture {
 	enc, _ := box.Seal("123:AA-test")
 	b := &store.Bridge{
 		Slug: "demo", Name: "演示桥", BotTokenEnc: enc, BotID: 42, BotUsername: "musebot",
-		WebhookSecret: "hook-secret", Mode: "webhook", Status: "active",
+		WebhookSecret: "hook-secret", AllowedUserIDs: "999", Mode: "webhook", Status: "active",
 		CreatedAt: now, UpdatedAt: now,
 	}
 	id, err := st.CreateBridge(t.Context(), b)
@@ -778,4 +778,62 @@ func TestPollStartsTypingImmediately(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("认领后应立即发送 sendChatAction(typing)")
+}
+
+// 名单之外的人发消息：要回 200（否则 Telegram 会一直重投），
+// 但不入库、不排队，后台只留一条内存提示。
+func TestWebhookDropsUnknownSender(t *testing.T) {
+	f := newFixture(t)
+	const stranger = `{
+  "update_id": 2001,
+  "message": {
+    "message_id": 8,
+    "from": {"id": 4242, "is_bot": false, "first_name": "路人"},
+    "chat": {"id": 4242, "type": "private"},
+    "date": 1763700000,
+    "text": "帮我写个脚本"
+  }
+}`
+	w := f.do(t, "POST", "/tg/demo", stranger,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"})
+	if w.Code != 200 {
+		t.Fatalf("被拒消息也要回 200，实际 %d: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), `"reason":"user_not_allowed"`) {
+		t.Fatalf("应说明拒绝原因，实际 %s", w.Body)
+	}
+	w = f.do(t, "GET", "/pending-count", "", nil)
+	if !strings.Contains(w.Body.String(), `"pending":0`) {
+		t.Fatalf("陌生人消息不该排队，实际 %s", w.Body)
+	}
+	if convs, _ := f.st.ListConversations(t.Context(), f.bridge.ID, 10); len(convs) != 0 {
+		t.Fatalf("陌生人消息不该建会话，实际 %d 个", len(convs))
+	}
+
+	// 后台要能看见"有人被挡了"和对方的 ID，否则填错 ID 时毫无线索。
+	req := httptest.NewRequest("GET", "/bridges/1", nil)
+	req.AddCookie(f.adminCookie(t))
+	rec := httptest.NewRecorder()
+	f.public.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, "刚拦下一条消息") || !strings.Contains(body, "4242") {
+		t.Fatalf("详情页应提示被拒的发送者，实际: %.400s", body)
+	}
+}
+
+// 配置空的桥不接收任何消息，且详情页要点明这一点。
+func TestEmptyAllowListReceivesNothing(t *testing.T) {
+	f := newFixture(t)
+	f.bridge.AllowedUserIDs = ""
+	if err := f.st.UpdateBridgeSettings(t.Context(), f.bridge.ID, f.bridge.Name, "", f.bridge.Mode, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(t, "POST", "/tg/demo", sampleUpdate,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"})
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"queued":false`) {
+		t.Fatalf("空名单不该排队，实际 %d %s", w.Code, w.Body)
+	}
+	if convs, _ := f.st.ListConversations(t.Context(), f.bridge.ID, 10); len(convs) != 0 {
+		t.Fatal("空名单不该入库")
+	}
 }
