@@ -176,7 +176,7 @@ func (f *fixture) do(t *testing.T, method, path, body string, headers map[string
 func (f *fixture) adminCookie(t *testing.T) *http.Cookie {
 	t.Helper()
 	form := "username=admin&password=pw"
-	req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form))
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	f.public.ServeHTTP(w, req)
@@ -460,7 +460,7 @@ func TestAdminPagesRender(t *testing.T) {
 	f := newFixture(t)
 
 	form := "username=admin&password=pw"
-	req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form))
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	f.admin.ServeHTTP(w, req)
@@ -478,16 +478,12 @@ func TestAdminPagesRender(t *testing.T) {
 	}
 
 	pages := map[string]string{
-		"/admin":               "总览",
-		"/admin/bridges/new":   "新建桥",
-		"/admin/bridges/1":     "接入信息",
-		"/admin/export":        "导出聊天记录",
-		"/admin/conversations": "",
+		"/":            "总览",
+		"/bridges/new": "新建桥",
+		"/bridges/1":   "接入信息",
+		"/export":      "导出聊天记录",
 	}
 	for path, marker := range pages {
-		if marker == "" {
-			continue
-		}
 		req := httptest.NewRequest("GET", path, nil)
 		req.AddCookie(cookie)
 		w := httptest.NewRecorder()
@@ -504,7 +500,7 @@ func TestAdminPagesRender(t *testing.T) {
 // 未登录访问后台页面必须跳转，不能泄漏任何数据。
 func TestAdminRequiresLogin(t *testing.T) {
 	f := newFixture(t)
-	for _, path := range []string{"/admin", "/admin/bridges/new", "/admin/export", "/admin/bridges/1"} {
+	for _, path := range []string{"/", "/bridges/new", "/export", "/bridges/1"} {
 		req := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
 		f.admin.ServeHTTP(w, req)
@@ -536,7 +532,7 @@ func TestConversationPageShowsMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("GET", fmt.Sprintf("/admin/conversations/%d", conv.ID), nil)
+	req := httptest.NewRequest("GET", fmt.Sprintf("/conversations/%d", conv.ID), nil)
 	// 直接拿会话页需要登录，这里手动构造会话。
 	now := time.Now().Unix()
 	_ = f.st.CreateSession(t.Context(), secret.HashToken("sess"), now+3600, now)
@@ -552,32 +548,31 @@ func TestConversationPageShowsMessages(t *testing.T) {
 	}
 }
 
-// 后台现在也挂在公网 443 上，必须能从 Public 直接打开登录页，
-// 且未登录访问任何 /admin 页面都要被挡回登录页。
+// 后台就在域名根路径上：同一个端口既要给后台页面，也要照常服务 API。
 func TestPublicServesAdmin(t *testing.T) {
 	f := newFixture(t)
 
-	w := f.do(t, "GET", "/admin/login", "", nil)
+	w := f.do(t, "GET", "/login", "", nil)
 	if w.Code != 200 {
-		t.Fatalf("公网 /admin/login 应 200，实际 %d", w.Code)
+		t.Fatalf("公网 /login 应 200，实际 %d", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "登录") {
 		t.Fatalf("登录页内容异常: %.200s", w.Body.String())
 	}
 
-	for _, path := range []string{"/admin", "/admin/export", "/admin/bridges/new"} {
+	for _, path := range []string{"/", "/export", "/bridges/new"} {
 		w := f.do(t, "GET", path, "", nil)
 		if w.Code != http.StatusSeeOther {
 			t.Fatalf("公网 %s 未登录应 303，实际 %d", path, w.Code)
 		}
-		if loc := w.Header().Get("Location"); loc != "/admin/login" {
+		if loc := w.Header().Get("Location"); loc != "/login" {
 			t.Fatalf("应跳登录页，实际 %q", loc)
 		}
 	}
 
 	// 登录后经公网入口可以正常访问。
 	form := "username=admin&password=pw"
-	req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form))
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w = httptest.NewRecorder()
 	f.public.ServeHTTP(w, req)
@@ -590,7 +585,7 @@ func TestPublicServesAdmin(t *testing.T) {
 	if cookie == nil {
 		t.Fatal("公网登录应下发会话 cookie")
 	}
-	req = httptest.NewRequest("GET", "/admin", nil)
+	req = httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
 	w = httptest.NewRecorder()
 	f.public.ServeHTTP(w, req)
@@ -599,10 +594,47 @@ func TestPublicServesAdmin(t *testing.T) {
 	}
 }
 
+// 老的 /admin 链接只做跳转：手机书签、早就打开的标签页里还是旧地址，
+// 直接 404 会让人以为服务挂了。用 308 而不是 301，
+// 表单 POST 跟过去仍然是 POST，不会把"吊销令牌"降级成 GET。
+func TestLegacyAdminPathRedirectsToRoot(t *testing.T) {
+	f := newFixture(t)
+	cases := map[string]string{
+		"/admin":           "/",
+		"/admin/":          "/",
+		"/admin/login":     "/login",
+		"/admin/bridges/1": "/bridges/1",
+		"/admin/export?format=csv&bridge_id=0": "/export?format=csv&bridge_id=0",
+	}
+	for from, want := range cases {
+		w := f.do(t, "GET", from, "", nil)
+		if w.Code != http.StatusPermanentRedirect {
+			t.Fatalf("%s 应 308，实际 %d", from, w.Code)
+		}
+		if loc := w.Header().Get("Location"); loc != want {
+			t.Fatalf("%s 应跳到 %q，实际 %q", from, want, loc)
+		}
+	}
+}
+
+// 后台搬到根路径之后，API 不能被页面路由抢走。
+// {$} 只匹配 "/" 本身，是这条测试守住的约束。
+func TestAPIRoutesSurviveAdminAtRoot(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{"/health", "/pending-count"} {
+		if w := f.do(t, "GET", path, "", nil); w.Code != 200 {
+			t.Fatalf("%s 应 200，实际 %d: %s", path, w.Code, w.Body)
+		}
+	}
+	if w := f.do(t, "GET", "/poll", "", f.auth()); w.Code != 200 {
+		t.Fatalf("/poll 应 200，实际 %d: %s", w.Code, w.Body)
+	}
+}
+
 // 后台页面必须带上防点击劫持和严格 CSP：它现在对公网开放了。
 func TestAdminSecurityHeaders(t *testing.T) {
 	f := newFixture(t)
-	w := f.do(t, "GET", "/admin/login", "", nil)
+	w := f.do(t, "GET", "/login", "", nil)
 	for h, want := range map[string]string{
 		"X-Frame-Options":        "DENY",
 		"X-Content-Type-Options": "nosniff",
@@ -628,7 +660,7 @@ func TestLoginRateLimitByIPNotPort(t *testing.T) {
 
 	try := func(port, password string) *httptest.ResponseRecorder {
 		form := "username=admin&password=" + password
-		req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(form))
+		req := httptest.NewRequest("POST", "/login", strings.NewReader(form))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.RemoteAddr = ip + ":" + port
 		w := httptest.NewRecorder()
@@ -654,7 +686,7 @@ func TestLoginRateLimitByIPNotPort(t *testing.T) {
 // onsubmit="return confirm(...)" 会被浏览器直接丢弃，删除会变成一击即中。
 func TestDeleteConfirmPageRenders(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest("GET", "/admin/bridges/1/delete", nil)
+	req := httptest.NewRequest("GET", "/bridges/1/delete", nil)
 	req.AddCookie(f.adminCookie(t))
 	w := httptest.NewRecorder()
 	f.public.ServeHTTP(w, req)
@@ -692,6 +724,32 @@ func TestTemplatesHaveNoInlineScript(t *testing.T) {
 		if loc := inline.FindIndex(data); loc != nil {
 			t.Fatalf("%s 含有内联脚本/事件处理器（偏移 %d），会被 CSP 挡掉: %q",
 				e.Name(), loc[0], string(data[max(0, loc[0]-40):loc[0]+60]))
+		}
+	}
+}
+
+// 每张表格都必须包在 .tw 滚动容器里。
+//
+// 手机上列一多就会把表格撑出卡片，整页跟着横向错位——这正是
+// "手机端格式错乱"最典型的样子。这条测试防止以后新增表格忘了包。
+func TestTablesWrappedForMobile(t *testing.T) {
+	entries, err := os.ReadDir("templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("templates", e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(data)
+		tables := strings.Count(s, "<table")
+		wraps := strings.Count(s, `<div class="tw">`)
+		if tables > wraps {
+			t.Fatalf("%s 有 %d 张表但只有 %d 个 .tw 容器", e.Name(), tables, wraps)
 		}
 	}
 }

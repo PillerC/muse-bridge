@@ -15,13 +15,23 @@ import (
 
 // Public 返回公网路由：Telegram webhook + Muse 接入 API + 管理后台。
 //
-// 后台也挂在 443 上，管理员用浏览器直接打开 /admin 登录即可，
-// 不必每次开 SSH 隧道。放开的前提是后台本身有三道闸：
+// 后台就在根路径上：直接打开域名首页就是总览（没登录会跳 /login），
+// 不再需要 /admin 前缀。放开的前提是后台本身有三道闸：
 // 会话 cookie 校验、登录失败限流、以及下方 securityHeaders 给的 CSP
 // 与 frame-ancestors（后台页面不含任何 JS，所以 script-src 直接禁死）。
 func (s *Server) Public() http.Handler {
 	mux := http.NewServeMux()
+	s.registerPublic(mux)
+	// 后台和 API 挂在同一个 mux 上，而不是按前缀分流：
+	// 根路径用 {$} 精确匹配（只吃 "/"），页面路径都带具体名字
+	// （/bridges、/export、/login），和 /poll、/reply、/tg/{slug} 不重叠。
+	// 这样既没有前缀分流那一层，也不会出现"新页面忘了同步注册"。
+	s.registerAdmin(mux)
+	return securityHeaders(mux)
+}
 
+// registerPublic 注册 Telegram webhook 与 Muse 接入 API。
+func (s *Server) registerPublic(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "muse-bridge"})
 	})
@@ -43,17 +53,6 @@ func (s *Server) Public() http.Handler {
 
 	// Telegram webhook：URL 里带 slug，secret 走请求头。
 	mux.HandleFunc("POST /tg/{slug}", s.handleWebhook)
-
-	// 后台按前缀分流到 Admin()。用前缀而不是给每个页面注册两遍，
-	// 保证 /admin 下新增页面时不需要在这里同步维护。
-	admin := s.Admin()
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
-			admin.ServeHTTP(w, r)
-			return
-		}
-		mux.ServeHTTP(w, r)
-	})
 }
 
 // securityHeaders 给后台页面加上防点击劫持、防 MIME 嗅探和严格 CSP。

@@ -12,15 +12,16 @@
 <div class="card">
   <div class="row" style="justify-content:space-between;margin-bottom:12px">
     <h2 style="margin:0">桥</h2>
-    <a class="btn primary" href="/admin/bridges/new">新建桥</a>
+    <a class="btn primary" href="/bridges/new">新建桥</a>
   </div>
   {{if .Data.Bridges}}
-  <table>
+  <div class="tw">
+  <table class="t-bridges">
     <thead><tr><th>桥</th><th>机器人</th><th>接入</th><th>会话</th><th>待处理</th><th>状态</th></tr></thead>
     <tbody>
     {{range .Data.Bridges}}
       <tr>
-        <td><a href="/admin/bridges/{{.ID}}">{{.Name}}</a><br><span class="mono" style="color:var(--muted)">{{.Slug}}</span></td>
+        <td><a href="/bridges/{{.ID}}">{{.Name}}</a><br><span class="mono" style="color:var(--muted)">{{.Slug}}</span></td>
         <td>{{if .BotUsername}}@{{.BotUsername}}{{else}}<span style="color:var(--muted)">未校验</span>{{end}}</td>
         <td>{{if eq .Mode "webhook"}}<span class="pill mute">webhook</span>{{else}}<span class="pill mute">长轮询</span>{{end}}</td>
         <td>{{.Conversations}}</td>
@@ -30,6 +31,7 @@
     {{end}}
     </tbody>
   </table>
+  </div>
   {{else}}
   <div class="empty">还没有桥。点右上角「新建桥」，填入机器人 token 就能开一座。</div>
   {{end}}
@@ -39,7 +41,8 @@
 <div class="card">
   <h2>死信</h2>
   <p class="sub" style="margin-bottom:10px">这些消息重试到上限仍未成功。先检查 Muse 和网络，再点重放。</p>
-  <table>
+  <div class="tw">
+  <table class="t-dead">
     <thead><tr><th>时间</th><th>会话</th><th>内容</th><th>错误</th><th></th></tr></thead>
     <tbody>
     {{range .Data.DeadJobs}}
@@ -48,11 +51,12 @@
         <td>{{if .ChatTitle}}{{.ChatTitle}}{{else}}{{.ChatID}}{{end}}</td>
         <td style="max-width:320px">{{truncate .Text 120}}</td>
         <td style="max-width:220px;color:var(--err)">{{truncate .LastError 100}}</td>
-        <td><form method="post" action="/admin/jobs/{{.JobID}}/replay" style="margin:0"><button class="btn">重放</button></form></td>
+        <td><form method="post" action="/jobs/{{.JobID}}/replay" style="margin:0"><button class="btn">重放</button></form></td>
       </tr>
     {{end}}
     </tbody>
   </table>
+  </div>
 </div>
 {{end}}
 {{template "foot" .}}

@@ -8,9 +8,9 @@
     该桥的全部会话、消息、令牌、待办任务会一并删除，<strong>不可恢复</strong>。
     如果只是想停掉它，返回上一页点「暂停」即可，数据都会保留。
   </p>
-  <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/delete">
+  <form method="post" action="/bridges/{{.Data.Bridge.ID}}/delete">
     <button class="btn danger">确认永久删除</button>
-    <a class="btn" href="/admin/bridges/{{.Data.Bridge.ID}}">取消</a>
+    <a class="btn" href="/bridges/{{.Data.Bridge.ID}}">取消</a>
   </form>
 </div>
 {{template "foot" .}}{{end}}

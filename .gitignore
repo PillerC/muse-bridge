@@ -11,6 +11,9 @@ __pycache__/
 # 系统文件
 .DS_Store
 
+# 本地联调脚本（含令牌，不入库）
+.tmp/
+
 # Go 构建产物与本地数据库
 bridge/dist/
 bridge/bin/

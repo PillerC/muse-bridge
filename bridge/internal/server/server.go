@@ -1,9 +1,11 @@
-// Package server 暴露两组 HTTP 接口：
+// Package server 暴露两组接口：
 //
 //   - 公网：Telegram webhook 和 Muse 接入 API，只做协议转换；
-//   - 后台：单管理员登录后的管理界面，默认只绑 127.0.0.1，走 SSH 隧道访问。
+//   - 后台：单管理员登录后的管理界面，就在域名根路径上，
+//     同时保留 127.0.0.1 的独立监听作为兜底入口。
 //
-// 两套接口用不同的监听地址，后台不出现在公网端口上。
+// 两组接口共用同一个端口，路径不重叠：API 用 /poll、/reply 这类动词，
+// 后台页面用 /bridges、/export 这类名词，根路径 {$} 精确匹配给总览。
 package server
 
 import (
@@ -117,11 +119,11 @@ func (s *Server) withAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(sessionCookie)
 		if err != nil || c.Value == "" {
-			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
 		if !s.st.SessionValid(r.Context(), hashToken(c.Value), s.svc.Now()) {
-			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
 		next(w, r)

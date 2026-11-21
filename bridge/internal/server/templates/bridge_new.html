@@ -2,7 +2,7 @@
 <h1>新建桥</h1>
 <p class="sub">一座桥连接一个 Telegram 机器人和一个 Muse 实例。机器人 token 会加密存储，Muse 永远看不到它。</p>
 
-<form class="card" method="post" action="/admin/bridges">
+<form class="card" method="post" action="/bridges">
   <label>桥名字</label>
   <input type="text" name="name" placeholder="例如：小助手 / 客服一号" required>
 
@@ -23,7 +23,7 @@
 
   <div class="row" style="margin-top:20px">
     <button class="btn primary" type="submit">创建并校验 token</button>
-    <a class="btn" href="/admin">取消</a>
+    <a class="btn" href="/">取消</a>
   </div>
   <p class="sub" style="margin:16px 0 0">
     创建时会调用 <code>getMe</code> 校验 token，并生成接入令牌和 webhook secret。

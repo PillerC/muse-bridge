@@ -35,10 +35,10 @@ rc-service muse-bridge restart
 
 ## 访问管理后台
 
-后台挂在公网的 `https://<域名>/admin`，直接浏览器访问并登录。
+后台就是域名首页 `https://<域名>/`，直接浏览器访问并登录。
 
 ```bash
-https://bridge.example.com/admin
+https://bridge.example.com/
 ```
 
 账号密码在 `/etc/muse-bridge.env`（`BRIDGE_ADMIN_USER` / `BRIDGE_ADMIN_PASSWORD`）。

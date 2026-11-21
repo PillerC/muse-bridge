@@ -3,8 +3,8 @@
 <p class="sub">
   {{.Data.Bridge.Name}} · <span class="mono">{{.Data.Conversation.ChatType}}</span>
   · chat_id <span class="mono">{{.Data.Conversation.ChatID}}</span>
-  · <a href="/admin/export?bridge_id=0&conversation_id={{.Data.Conversation.ID}}">导出这段对话</a>
-  {{if .Data.PrevID}} · <a href="/admin/conversations/{{.Data.Conversation.ID}}?before={{.Data.PrevID}}">更早</a>{{end}}
+  · <a href="/export?bridge_id=0&conversation_id={{.Data.Conversation.ID}}">导出这段对话</a>
+  {{if .Data.PrevID}} · <a href="/conversations/{{.Data.Conversation.ID}}?before={{.Data.PrevID}}">更早</a>{{end}}
 </p>
 
 <div class="card">
@@ -18,7 +18,9 @@
         {{if .JobStatus}} · <span class="pill mute">{{.JobStatus}}</span>{{end}}
         {{if and (eq .Direction "in") (ne .JobStatus "")}}<span class="pill mute">#{{.ID}}</span>{{end}}
       </div>
-      {{if .Text}}{{.Text}}{{else}}<span style="color:var(--muted)">{{if .ContentHint}}{{.ContentHint}}{{else}}[{{.ContentKind}}]{{end}}</span>{{end}}
+      {{- /* 正文单独包一层：白空格预留在 .body 上，模板里的缩进和换行
+             就不会被当成空行渲染出来（以前每条气泡顶上都有好几行空白）。 */ -}}
+      <div class="body">{{if .Text}}{{.Text}}{{else}}<span style="color:var(--muted)">{{if .ContentHint}}{{.ContentHint}}{{else}}[{{.ContentKind}}]{{end}}</span>{{end}}</div>
     </div>
     {{end}}
   </div>
@@ -27,5 +29,5 @@
   {{end}}
 </div>
 
-{{if .Data.NextID}}<p><a href="/admin/conversations/{{.Data.Conversation.ID}}">回到最新</a></p>{{end}}
+{{if .Data.NextID}}<p><a href="/conversations/{{.Data.Conversation.ID}}">回到最新</a></p>{{end}}
 {{template "foot" .}}

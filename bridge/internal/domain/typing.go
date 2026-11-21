@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 )
@@ -102,8 +103,10 @@ func (t *Typing) loop(ctx context.Context, jobID int64, e *typingEntry, send fun
 				}
 				fails++
 				// 连续失败多半是机器人被踢出群或没有发消息权限，
-				// 继续打只是浪费配额。
+				// 继续打只是浪费配额。这里留一条日志：typing 是纯装饰性请求，
+				// 失败时用户只是看不到"输入中"，不记日志就完全无从排查。
 				if fails >= t.maxFails {
+					log.Printf("typing: job=%d chat=%d 连续 %d 次失败，停止保活: %v", jobID, e.chatID, fails, err)
 					return
 				}
 				continue

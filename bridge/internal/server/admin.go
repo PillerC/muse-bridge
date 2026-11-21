@@ -27,38 +27,64 @@ const sessionTTL = 12 * time.Hour
 //go:embed templates/*.html
 var tplFS embed.FS
 
-// Admin 返回后台路由。
+// Admin 返回只含后台的独立 handler。
 //
-// 同时挂在两个地方：127.0.0.1 的独立监听（TLS 出问题时的兜底入口）
-// 和公网 443 的 /admin 前缀下。
+// 给 127.0.0.1 的兜底监听用（TLS 出问题、公网 443 打不开时还能从本机进）。
+// 公网那边不是这样挂的：后台和 API 合在一个 mux 上，见 Public()。
 func (s *Server) Admin() http.Handler {
 	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
-	})
-	mux.HandleFunc("GET /admin/login", s.handleLoginPage)
-	mux.HandleFunc("POST /admin/login", s.handleLogin)
-	mux.HandleFunc("POST /admin/logout", s.handleLogout)
-
-	mux.HandleFunc("GET /admin", s.withAdmin(s.handleDashboard))
-	mux.HandleFunc("GET /admin/bridges/new", s.withAdmin(s.handleNewBridgePage))
-	mux.HandleFunc("POST /admin/bridges", s.withAdmin(s.handleCreateBridge))
-	mux.HandleFunc("GET /admin/bridges/{id}", s.withAdmin(s.handleBridgeDetail))
-	mux.HandleFunc("POST /admin/bridges/{id}/settings", s.withAdmin(s.handleBridgeSettings))
-	mux.HandleFunc("POST /admin/bridges/{id}/status", s.withAdmin(s.handleBridgeStatus))
-	mux.HandleFunc("POST /admin/bridges/{id}/tokens", s.withAdmin(s.handleNewToken))
-	mux.HandleFunc("POST /admin/bridges/{id}/tokens/{tid}/revoke", s.withAdmin(s.handleRevokeToken))
-	mux.HandleFunc("POST /admin/bridges/{id}/webhook", s.withAdmin(s.handleWebhookAdmin))
-	mux.HandleFunc("GET /admin/bridges/{id}/webhook-status", s.withAdmin(s.handleWebhookStatus))
-	mux.HandleFunc("POST /admin/bridges/{id}/delete", s.withAdmin(s.handleDeleteBridge))
-	mux.HandleFunc("GET /admin/bridges/{id}/delete", s.withAdmin(s.handleDeleteConfirm))
-
-	mux.HandleFunc("GET /admin/conversations/{id}", s.withAdmin(s.handleConversation))
-	mux.HandleFunc("GET /admin/export", s.withAdmin(s.handleExportPage))
-	mux.HandleFunc("POST /admin/jobs/{id}/replay", s.withAdmin(s.handleReplay))
-
+	s.registerAdmin(mux)
 	return securityHeaders(mux)
+}
+
+// registerAdmin 把后台页面注册到一个 mux 上，路径全在根下。
+//
+// 域名首页就是后台，不再有 /admin 前缀：用户只需要记住一个地址，
+// 手机上也不用敲路径。页面路径都带具体名字（/bridges、/export、/login），
+// 和 API 的 /poll、/reply、/tg/{slug} 不重叠，所以能安全地共用一个 mux。
+func (s *Server) registerAdmin(mux *http.ServeMux) {
+	mux.HandleFunc("GET /login", s.handleLoginPage)
+	mux.HandleFunc("POST /login", s.handleLogin)
+	mux.HandleFunc("POST /logout", s.handleLogout)
+
+	// {$} 只匹配根路径本身，不会把 /poll 之类吞掉。
+	mux.HandleFunc("GET /{$}", s.withAdmin(s.handleDashboard))
+	mux.HandleFunc("GET /bridges/new", s.withAdmin(s.handleNewBridgePage))
+	mux.HandleFunc("POST /bridges", s.withAdmin(s.handleCreateBridge))
+	mux.HandleFunc("GET /bridges/{id}", s.withAdmin(s.handleBridgeDetail))
+	mux.HandleFunc("POST /bridges/{id}/settings", s.withAdmin(s.handleBridgeSettings))
+	mux.HandleFunc("POST /bridges/{id}/status", s.withAdmin(s.handleBridgeStatus))
+	mux.HandleFunc("POST /bridges/{id}/tokens", s.withAdmin(s.handleNewToken))
+	mux.HandleFunc("POST /bridges/{id}/tokens/{tid}/revoke", s.withAdmin(s.handleRevokeToken))
+	mux.HandleFunc("POST /bridges/{id}/webhook", s.withAdmin(s.handleWebhookAdmin))
+	mux.HandleFunc("GET /bridges/{id}/webhook-status", s.withAdmin(s.handleWebhookStatus))
+	mux.HandleFunc("POST /bridges/{id}/delete", s.withAdmin(s.handleDeleteBridge))
+	mux.HandleFunc("GET /bridges/{id}/delete", s.withAdmin(s.handleDeleteConfirm))
+
+	mux.HandleFunc("GET /conversations/{id}", s.withAdmin(s.handleConversation))
+	mux.HandleFunc("GET /export", s.withAdmin(s.handleExportPage))
+	mux.HandleFunc("POST /jobs/{id}/replay", s.withAdmin(s.handleReplay))
+
+	// 老地址只做跳转：手机书签和早就打开着的页面里还是 /admin/xxx。
+	// 用 308 而不是 301，表单 POST 跟过去仍然是 POST，
+	// 否则"吊销令牌"这类操作会被降级成 GET 然后 405。
+	mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+		redirectLegacyAdmin(w, r, "/")
+	})
+	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
+		redirectLegacyAdmin(w, r, strings.TrimPrefix(r.URL.Path, "/admin"))
+	})
+}
+
+// redirectLegacyAdmin 把 /admin 下的旧链接原地换到根路径，查询串原样带上。
+func redirectLegacyAdmin(w http.ResponseWriter, r *http.Request, target string) {
+	if target == "" {
+		target = "/"
+	}
+	if q := r.URL.RawQuery; q != "" {
+		target += "?" + q
+	}
+	http.Redirect(w, r, target, http.StatusPermanentRedirect)
 }
 
 // ---------- 渲染 ----------
@@ -207,7 +233,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   r.TLS != nil,
 		MaxAge:   int(sessionTTL.Seconds()),
 	})
-	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +241,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		s.st.DeleteSession(r.Context(), secret.HashToken(c.Value))
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
-	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 // ---------- 总览 ----------
@@ -421,7 +447,7 @@ func (s *Server) handleBridgeSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	http.Redirect(w, r, "/admin/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 func (s *Server) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
@@ -432,7 +458,7 @@ func (s *Server) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 		status = "paused"
 	}
 	_ = s.st.SetBridgeStatus(r.Context(), id, status, s.svc.Now())
-	http.Redirect(w, r, "/admin/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 func (s *Server) handleNewToken(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +481,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	tid, _ := strconv.ParseInt(r.PathValue("tid"), 10, 64)
 	_ = s.st.RevokeToken(r.Context(), id, tid, s.svc.Now())
-	http.Redirect(w, r, "/admin/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 func (s *Server) handleWebhookAdmin(w http.ResponseWriter, r *http.Request) {
@@ -486,7 +512,7 @@ func (s *Server) handleWebhookAdmin(w http.ResponseWriter, r *http.Request) {
 		s.flashToBridge(w, r, id, "操作失败："+err.Error())
 		return
 	}
-	http.Redirect(w, r, "/admin/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 // handleWebhookStatus 返回 Telegram 侧的 webhook 实况。
@@ -548,7 +574,7 @@ func (s *Server) handleDeleteBridge(w http.ResponseWriter, r *http.Request) {
 		s.flashToBridge(w, r, id, "删除失败："+err.Error())
 		return
 	}
-	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // ---------- 会话与导出 ----------
@@ -683,7 +709,7 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
 		s.flashToBridge(w, r, job.BridgeID, "重放失败："+err.Error())
 		return
 	}
-	http.Redirect(w, r, "/admin/bridges/"+strconv.FormatInt(job.BridgeID, 10), http.StatusSeeOther)
+	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(job.BridgeID, 10), http.StatusSeeOther)
 }
 
 // ---------- 小工具 ----------
@@ -709,7 +735,7 @@ func (s *Server) flash(w http.ResponseWriter, r *http.Request, kind, msg string)
 	})
 	referer := r.Referer()
 	if referer == "" {
-		referer = "/admin"
+		referer = "/"
 	}
 	http.Redirect(w, r, referer, http.StatusSeeOther)
 }

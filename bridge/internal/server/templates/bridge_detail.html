@@ -27,7 +27,7 @@
     {{if .Data.WebhookURL}}
     <label style="margin-top:18px">Telegram webhook</label>
     <div class="token">{{.Data.WebhookURL}}</div>
-    <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/webhook" style="margin-top:10px">
+    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/webhook" style="margin-top:10px">
       <button class="btn" name="action" value="set">重新注册 webhook</button>
       <button class="btn" name="action" value="delete">断开 webhook</button>
     </form>
@@ -36,7 +36,7 @@
 
   <div class="card">
     <h2>设置</h2>
-    <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/settings">
+    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/settings">
       <label>名字</label>
       <input type="text" name="name" value="{{.Data.Bridge.Name}}" required>
       <label>允许的会话 ID（留空不限制）</label>
@@ -48,7 +48,7 @@
       </select>
       <div class="row" style="margin-top:16px"><button class="btn primary">保存</button></div>
     </form>
-    <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/status" style="margin-top:10px">
+    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/status" style="margin-top:10px">
       {{if eq .Data.Bridge.Status "active"}}
       <button class="btn" name="status" value="paused">暂停这座桥</button>
       {{else}}
@@ -61,12 +61,13 @@
 <div class="card">
   <div class="row" style="justify-content:space-between;margin-bottom:10px">
     <h2 style="margin:0">令牌</h2>
-    <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/tokens" style="margin:0">
+    <form method="post" action="/bridges/{{.Data.Bridge.ID}}/tokens" style="margin:0">
       <button class="btn">签发新令牌</button>
     </form>
   </div>
   {{if .Data.Tokens}}
-  <table>
+  <div class="tw">
+  <table class="t-tokens">
     <thead><tr><th>标签</th><th>前缀</th><th>最近使用</th><th>状态</th><th></th></tr></thead>
     <tbody>
     {{range .Data.Tokens}}
@@ -76,13 +77,14 @@
         <td>{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}<span style="color:var(--muted)">从未</span>{{end}}</td>
         <td>{{if .RevokedAt}}<span class="pill mute">已吊销</span>{{else}}<span class="pill ok">有效</span>{{end}}</td>
         <td>{{if not .RevokedAt}}
-          <form method="post" action="/admin/bridges/{{$.Data.Bridge.ID}}/tokens/{{.ID}}/revoke" style="margin:0">
+          <form method="post" action="/bridges/{{$.Data.Bridge.ID}}/tokens/{{.ID}}/revoke" style="margin:0">
             <button class="btn danger">吊销</button>
           </form>{{end}}</td>
       </tr>
     {{end}}
     </tbody>
   </table>
+  </div>
   {{else}}<div class="empty">还没有令牌。</div>{{end}}
 </div>
 
@@ -93,7 +95,7 @@
     {{range .Data.Conversations}}
     <li>
       <div class="grow">
-        <a href="/admin/conversations/{{.ID}}">{{if .Title}}{{.Title}}{{else}}{{.ChatID}}{{end}}</a>
+        <a href="/conversations/{{.ID}}">{{if .Title}}{{.Title}}{{else}}{{.ChatID}}{{end}}</a>
         <span class="pill mute">{{.ChatType}}</span>
         {{if .PendingCount}}<span class="pill warn">待处理 {{.PendingCount}}</span>{{end}}
       </div>
@@ -107,6 +109,7 @@
 {{if .Data.DeadJobs}}
 <div class="card">
   <h2>死信</h2>
+  <div class="tw">
   <table>
     <thead><tr><th>时间</th><th>内容</th><th>错误</th><th></th></tr></thead>
     <tbody>
@@ -115,17 +118,18 @@
         <td class="mono">{{ts .UpdatedAt}}</td>
         <td style="max-width:300px">{{truncate .Text 100}}</td>
         <td style="max-width:200px;color:var(--err)">{{truncate .LastError 80}}</td>
-        <td><form method="post" action="/admin/jobs/{{.JobID}}/replay" style="margin:0"><button class="btn">重放</button></form></td>
+        <td><form method="post" action="/jobs/{{.JobID}}/replay" style="margin:0"><button class="btn">重放</button></form></td>
       </tr>
     {{end}}
     </tbody>
   </table>
+  </div>
 </div>
 {{end}}
 
 <div class="card" style="border-color:#f3c7c7">
   <h2 style="color:var(--err)">删除桥</h2>
   <p class="sub">会连同该桥的全部会话、消息、令牌一起删除，不可恢复。只是想停用的话用上面的「暂停」。</p>
-  <a class="btn danger" href="/admin/bridges/{{.Data.Bridge.ID}}/delete">永久删除</a>
+  <a class="btn danger" href="/bridges/{{.Data.Bridge.ID}}/delete">永久删除</a>
 </div>
 {{template "foot" .}}
