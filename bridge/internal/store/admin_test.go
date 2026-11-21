@@ -80,3 +80,38 @@ func TestUpdateAdminRenamesAndRehashes(t *testing.T) {
 		t.Fatal("密码摘要没有更新")
 	}
 }
+
+// 初始化页的写入必须是"表为空才成功"：第二次调用返回 false，不改已有账号。
+func TestCreateFirstAdminOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	ok, err := st.CreateFirstAdmin(ctx, "alice", secret.HashPassword("first"), 1)
+	if err != nil || !ok {
+		t.Fatalf("首次应创建成功，实际 ok=%v err=%v", ok, err)
+	}
+	ok, err = st.CreateFirstAdmin(ctx, "bob", secret.HashPassword("second"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("已有账号时不该再建第二个")
+	}
+	if n, _ := st.CountAdmins(ctx); n != 1 {
+		t.Fatalf("应只有一个账号，实际 %d", n)
+	}
+	a, err := st.GetAdmin(ctx, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !secret.VerifyPassword(a.PasswordHash, "first") {
+		t.Fatal("已有账号的密码不该被覆盖")
+	}
+	if _, err := st.GetAdmin(ctx, "bob"); err == nil {
+		t.Fatal("bob 不该被创建")
+	}
+}

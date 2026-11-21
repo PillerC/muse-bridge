@@ -56,8 +56,6 @@ BRIDGE_PUBLIC_ADDR=0.0.0.0:443
 BRIDGE_PUBLIC_URL=https://bridge.example.com
 BRIDGE_TLS=autocert
 BRIDGE_ACME_EMAIL=you@example.com
-BRIDGE_ADMIN_USER=admin
-BRIDGE_ADMIN_PASSWORD=<强密码>
 BRIDGE_SECRET=<上面生成的 base64>
 BRIDGE_MODE=webhook
 ```
@@ -75,7 +73,9 @@ rc-service muse-bridge start
 
 ### 2. 进后台建一座桥
 
-后台就是域名首页 `https://<域名>/`，用环境变量里的账号密码登录。
+后台就是域名首页 `https://<域名>/`。**首次打开会让你创建管理员账号**（用户名 + 至少 8 位密码），
+建完直接进后台，没有默认密码这回事。
+也因此**部署完要立刻打开创建**：还没建号的实例，谁先访问谁就能成为管理员。
 
 ```text
 https://bridge.example.com/
@@ -135,8 +135,8 @@ Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 - **聊天记录**：按会话看双向消息，带任务状态
 - **导出**：按桥 / 会话 / 时间范围导出 CSV（带 BOM，Excel 直接开）或 JSON
 - **死信重放**：修好问题后一键放回队列
-- **账号**：改后台的用户名和密码。env 里的账号只在首次部署时用来建号，
-  之后以库里为准；忘记密码就设 `BRIDGE_ADMIN_RESET=1` 重启，用 env 覆盖回去
+- **账号**：改后台的用户名和密码。账号只由首次访问时创建，env 不参与；
+  忘记密码就设 `BRIDGE_ADMIN_RESET=1` 并用 env 写上要重置成的账号密码，重启覆盖回去
 
 ## 安全模型
 

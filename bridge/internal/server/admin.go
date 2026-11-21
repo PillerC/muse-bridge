@@ -50,6 +50,11 @@ func (s *Server) Admin() http.Handler {
 // 手机上也不用敲路径。页面路径都带具体名字（/bridges、/export、/login），
 // 和 API 的 /poll、/reply、/tg/{slug} 不重叠，所以能安全地共用一个 mux。
 func (s *Server) registerAdmin(mux *http.ServeMux) {
+	// 首次部署：库里没有任何账号时，/login 会把人送到 /setup 建第一个管理员。
+	// 有账号之后 /setup 一律 303 回 /login，不会变成第二个注册入口。
+	mux.HandleFunc("GET /setup", s.handleSetupPage)
+	mux.HandleFunc("POST /setup", s.handleSetup)
+
 	mux.HandleFunc("GET /login", s.handleLoginPage)
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
@@ -188,8 +193,113 @@ func (l *loginLimiter) hit(ip string) {
 	l.attempt[ip] = append(l.attempt[ip], time.Now())
 }
 
+// handleLoginPage 在库里还没有账号时直接把人送到初始化页。
+//
+// 新建的实例没有任何"默认密码"，登录框在没有账号可登的情况下只会让人困惑，
+// 所以这里不留登录页，直接 303 到 /setup。
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	n, err := s.st.CountAdmins(r.Context())
+	if err != nil {
+		http.Error(w, "读取账号失败", http.StatusInternalServerError)
+		return
+	}
+	if n == 0 {
+		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		return
+	}
 	s.render(w, r, "login.html", pageData{Title: "登录"})
+}
+
+// handleSetupPage 是首次访问的初始化页：建第一个管理员。
+func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
+	n, err := s.st.CountAdmins(r.Context())
+	if err != nil {
+		http.Error(w, "读取账号失败", http.StatusInternalServerError)
+		return
+	}
+	if n > 0 {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	s.render(w, r, "setup.html", pageData{Title: "创建管理员", Data: map[string]string{}})
+}
+
+var setupUserRe = regexp.MustCompile(`^[A-Za-z0-9._-]{3,32}$`)
+
+// handleSetup 创建第一个管理员，成功后直接登录进后台。
+//
+// 规则跟「账号」页保持一致：用户名 3–32 位安全字符、密码至少 8 位、两次一致。
+// 写入用 CreateFirstAdmin，判断"表为空"和写入是同一条 SQL，
+// 并发提交时只有一个人能建成，另一个人被送回登录页。
+func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
+	n, err := s.st.CountAdmins(r.Context())
+	if err != nil {
+		http.Error(w, "读取账号失败", http.StatusInternalServerError)
+		return
+	}
+	if n > 0 {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.render(w, r, "setup.html", pageData{Title: "创建管理员", Error: "请求格式错误"})
+		return
+	}
+	username := strings.TrimSpace(r.PostFormValue("username"))
+	password := r.PostFormValue("password")
+	password2 := r.PostFormValue("password2")
+
+	fail := func(msg string) {
+		s.render(w, r, "setup.html", pageData{Title: "创建管理员", Error: msg,
+			Data: map[string]string{"Username": username}})
+	}
+	switch {
+	case !setupUserRe.MatchString(username):
+		fail("用户名 3–32 位，只能用字母、数字、点、下划线和连字符")
+		return
+	case len(password) < 8:
+		fail("密码至少 8 位")
+		return
+	case password != password2:
+		fail("两次输入的密码不一致")
+		return
+	}
+
+	now := s.svc.Now()
+	created, err := s.st.CreateFirstAdmin(r.Context(), username, secret.HashPassword(password), now)
+	if err != nil {
+		fail("创建失败：" + err.Error())
+		return
+	}
+	if !created {
+		// 刚好有人抢先建好了：不用报错，去登录就是。
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := s.startSession(w, r); err != nil {
+		s.render(w, r, "login.html", pageData{Title: "登录", Error: "账号已创建，请重新登录"})
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// startSession 发一枚会话 cookie 并落库，登录和初始化共用。
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request) error {
+	token := secret.NewToken()
+	now := s.svc.Now()
+	if err := s.st.CreateSession(r.Context(), secret.HashToken(token), now+int64(sessionTTL.Seconds()), now); err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
+		MaxAge:   int(sessionTTL.Seconds()),
+	})
+	return nil
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -212,21 +322,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := secret.NewToken()
-	now := s.svc.Now()
-	if err := s.st.CreateSession(r.Context(), secret.HashToken(token), now+int64(sessionTTL.Seconds()), now); err != nil {
+	if err := s.startSession(w, r); err != nil {
 		s.render(w, r, "login.html", pageData{Title: "登录", Error: "创建会话失败"})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
-		MaxAge:   int(sessionTTL.Seconds()),
-	})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

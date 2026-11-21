@@ -168,24 +168,23 @@ func main() {
 
 // bootstrapAdmin 决定这次启动要不要动管理员账号。
 //
-// 后台开放了改密码，所以 env 不能继续"每次启动都覆盖"——那样网页上刚改的
-// 密码下次重启就没了。现在：库里没有这个账号才用 env 建；BRIDGE_ADMIN_RESET=1
-// 才用 env 强制覆盖（忘记密码时的唯一退路）。
+// 正常情况什么都不做：账号由首次访问时的初始化页创建（/setup）。
+// 环境变量不再是"建号"的来源，也不是密码的真相源——否则网页上刚改的
+// 密码下次重启就被顶回去。它只剩一个用途：忘了密码时，
+// 设 BRIDGE_ADMIN_RESET=1 用 env 里的账号密码强制覆盖回来。
 func bootstrapAdmin(ctx context.Context, st *store.Store, cfg *config.Config) error {
-	now := time.Now().Unix()
-	hash := secret.HashPassword(cfg.AdminPassword)
 	if cfg.AdminReset {
+		now := time.Now().Unix()
+		hash := secret.HashPassword(cfg.AdminPassword)
 		log.Printf("BRIDGE_ADMIN_RESET=1：用环境变量覆盖账号 %s 的密码", cfg.AdminUser)
 		return st.UpsertAdmin(ctx, cfg.AdminUser, hash, now)
 	}
-	if err := st.EnsureAdmin(ctx, cfg.AdminUser, hash, now); err != nil {
+	n, err := st.CountAdmins(ctx)
+	if err != nil {
 		return err
 	}
-	// 账号在、但 env 里的密码跟库里的不一致，基本就是网页上改过密码。
-	// 这里不改库，只留一句提示，免得"我改了 env 怎么没生效"变成无头案。
-	if a, err := st.GetAdmin(ctx, cfg.AdminUser); err == nil && !secret.VerifyPassword(a.PasswordHash, cfg.AdminPassword) {
-		log.Printf("提示：环境变量里的密码与库中 %s 的密码不一致，已按库中的为准；"+
-			"要强制用 env 覆盖请设 BRIDGE_ADMIN_RESET=1 再重启", cfg.AdminUser)
+	if n == 0 {
+		log.Printf("还没有管理员账号，访问首页会引导创建（/setup）")
 	}
 	return nil
 }

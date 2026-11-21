@@ -36,6 +36,37 @@ func (s *Store) EnsureAdmin(ctx context.Context, username, passwordHash string, 
 	return err
 }
 
+// CountAdmins 返回账号数量。
+//
+// 后台用它判断"是不是还没初始化"：为 0 说明库里一个账号都没有，
+// 首页要引导去创建管理员，而不是让人对着登录框猜密码。
+func (s *Store) CountAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admins`).Scan(&n)
+	return n, err
+}
+
+// CreateFirstAdmin 只在表为空时插入，返回是否真的写进去了。
+//
+// 判断和写入在同一条 SQL 里（INSERT ... SELECT ... WHERE NOT EXISTS），
+// 所以两个人同时打开初始化页面、同时提交，也只有一个能成功——
+// 另一个人拿到 created=false，被送回登录页。用 SELECT 再 INSERT 的写法
+// 在并发下会两个都成功，第二个把第一个顶掉。
+func (s *Store) CreateFirstAdmin(ctx context.Context, username, passwordHash string, now int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO admins (username, password_hash, created_at)
+		 SELECT ?,?,? WHERE NOT EXISTS (SELECT 1 FROM admins)`,
+		username, passwordHash, now)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ListAdmins 返回全部后台账号，按 id 升序（第一个就是最早建的那个）。
 func (s *Store) ListAdmins(ctx context.Context) ([]*Admin, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, username, password_hash FROM admins ORDER BY id`)

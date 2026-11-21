@@ -1246,3 +1246,92 @@ func TestAccountChangeUsernameAndPassword(t *testing.T) {
 		t.Fatal("旧密码应失效")
 	}
 }
+
+// 全新实例的首次访问：登录页不存在，直接去初始化页建第一个管理员。
+func TestFirstRunSetupFlow(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.st.DB().ExecContext(t.Context(), `DELETE FROM admins`); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		f.public.ServeHTTP(w, req)
+		return w
+	}
+	post := func(form string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/setup", strings.NewReader(form))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		f.public.ServeHTTP(w, req)
+		return w
+	}
+
+	// 没有账号时，未登录访问首页 → /login，而 /login 又把人送回 /setup。
+	if w := get("/"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+		t.Fatalf("未登录访问首页应 303 /login，实际 %d %q", w.Code, w.Header().Get("Location"))
+	}
+	if w := get("/login"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/setup" {
+		t.Fatalf("没有账号时 /login 应 303 /setup，实际 %d %q", w.Code, w.Header().Get("Location"))
+	}
+	w := get("/setup")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "创建管理员") {
+		t.Fatalf("/setup 应 200 并显示创建表单，实际 %d", w.Code)
+	}
+
+	// 校验拦住：用户名太短、密码太短、两次不一致，都不该建号。
+	for _, form := range []string{
+		"username=ab&password=abcdefgh&password2=abcdefgh",
+		"username=alice&password=short&password2=short",
+		"username=alice&password=abcdefgh&password2=abcdefgi",
+	} {
+		if w := post(form); w.Code != http.StatusOK {
+			t.Fatalf("%s 应留在表单页（200），实际 %d", form, w.Code)
+		}
+	}
+	if n, err := f.st.CountAdmins(t.Context()); err != nil || n != 0 {
+		t.Fatalf("校验失败时不该建号，实际 %d 个（err=%v）", n, err)
+	}
+
+	// 正常创建：303 进后台，并且当场登进去（带会话 cookie）。
+	w = post("username=alice&password=abcdefgh&password2=abcdefgh")
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
+		t.Fatalf("创建成功应 303 /，实际 %d %q", w.Code, w.Header().Get("Location"))
+	}
+	var cookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "mb_admin" {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("创建成功后应直接下发会话 cookie")
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	dash := httptest.NewRecorder()
+	f.public.ServeHTTP(dash, req)
+	if dash.Code != http.StatusOK {
+		t.Fatalf("带会话访问首页应 200，实际 %d", dash.Code)
+	}
+
+	// 有账号之后 /setup 关掉，再打开就是回登录页；用新账号能登录。
+	if w := get("/setup"); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+		t.Fatalf("有账号后 /setup 应 303 /login，实际 %d %q", w.Code, w.Header().Get("Location"))
+	}
+	login := func(u, p string) int {
+		req := httptest.NewRequest("POST", "/login",
+			strings.NewReader("username="+u+"&password="+p))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		f.public.ServeHTTP(w, req)
+		return w.Code
+	}
+	if login("alice", "abcdefgh") != http.StatusSeeOther {
+		t.Fatal("应能用刚创建的账号密码登录")
+	}
+	if login("alice", "wrongpass") != http.StatusOK {
+		t.Fatal("错误密码不该登录成功")
+	}
+}

@@ -28,8 +28,8 @@ type Config struct {
 	TLSKey  string
 	// DataDir 放数据库、日志、证书缓存。
 	DataDir string
-	// AdminUser / AdminPassword 是**初始**管理员：只在库里还没有账号时生效，
-	// 之后以库为准（后台 /account 可以改）。BRIDGE_ADMIN_RESET=1 时强制用 env 覆盖。
+	// AdminUser / AdminPassword 平时不参与建号：账号由首次访问的 /setup 创建。
+	// 只有 BRIDGE_ADMIN_RESET=1 时才用它们强制覆盖库里的账号密码（忘记密码的退路）。
 	AdminUser     string
 	AdminPassword string
 	AdminReset    bool
@@ -96,8 +96,10 @@ func Load() (*Config, error) {
 	}
 	c.Secret = secret
 
-	if c.AdminPassword == "" {
-		return nil, errors.New("BRIDGE_ADMIN_PASSWORD 未设置：首次启动需要它来创建管理员")
+	// 账号只在遗忘密码、主动要求重置时才需要，所以默认不强制配置；
+	// 但既然写了 RESET，就必须把要重置成的账号密码一起给全。
+	if c.AdminReset && (c.AdminUser == "" || c.AdminPassword == "") {
+		return nil, errors.New("BRIDGE_ADMIN_RESET=1 需要同时设置 BRIDGE_ADMIN_USER 和 BRIDGE_ADMIN_PASSWORD")
 	}
 	if c.DefaultMode != "poll" && c.DefaultMode != "webhook" {
 		return nil, fmt.Errorf("BRIDGE_MODE 只能是 poll 或 webhook，当前 %q", c.DefaultMode)

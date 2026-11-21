@@ -41,8 +41,8 @@ rc-service muse-bridge restart
 https://bridge.example.com/
 ```
 
-账号密码首次由 `/etc/muse-bridge.env`（`BRIDGE_ADMIN_USER` / `BRIDGE_ADMIN_PASSWORD`）创建，
-之后以数据库为准——后台右上角「账号」页可以改用户名和密码。
+首次访问首页会引导创建管理员账号（`/setup`），建完直接进后台；没有默认账号密码。
+之后在右上角「账号」页可以改用户名和密码。部署完请立刻打开创建，别把未初始化的实例晾在公网。
 
 后台对公网开放的三道防线：
 
@@ -54,7 +54,8 @@ https://bridge.example.com/
 
 改密码：后台「账号」页，填当前密码 + 新密码保存，所有登录立即失效，用新密码重登。
 
-**忘记密码**：在 env 里加一行 `BRIDGE_ADMIN_RESET=1` 并写上要重置成的密码，重启；启动日志会说明这次是用 env 覆盖。登进去后把 `BRIDGE_ADMIN_RESET` 删掉，否则每次重启都会重置。
+**忘记密码**：在 env 里写上 `BRIDGE_ADMIN_USER` / `BRIDGE_ADMIN_PASSWORD`，再加一行 `BRIDGE_ADMIN_RESET=1`，重启；
+启动日志会说明这次是用 env 覆盖。登进去后把 `BRIDGE_ADMIN_RESET` 删掉，否则每次重启都会重置。
 
 ## 升级
 
