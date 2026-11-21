@@ -314,6 +314,74 @@ func TestWebhookToReplyFlow(t *testing.T) {
 	}
 }
 
+// 匿名 /pending-count 是所有 active 桥的合计：任何一座桥有活，装了 hook 的
+// agent 全都会醒。带 ?bridge=<slug> 只算这一座，各桥的 hook 才不会互相惊醒。
+func TestPendingCountScopedBySlug(t *testing.T) {
+	f := newFixture(t)
+
+	// 第二座桥，slug 和 secret 都与 fixture 里那座不同。
+	now := time.Now().Unix()
+	other := &store.Bridge{
+		Slug: "other", Name: "第二座", BotTokenEnc: f.bridge.BotTokenEnc,
+		BotID: 43, BotUsername: "otherbot",
+		WebhookSecret: "hook-secret-2", Mode: "webhook", Status: "active",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := f.st.CreateBridge(t.Context(), other); err != nil {
+		t.Fatalf("建第二座桥: %v", err)
+	}
+
+	// demo 两座各投一条，other 投一条（同一个 update_id 不算重复：
+	// 唯一索引是 (bridge_id, update_id)）。
+	second := strings.Replace(sampleUpdate, `"update_id": 1001`, `"update_id": 1002`, 1)
+	if w := f.do(t, "POST", "/tg/demo", sampleUpdate,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"}); w.Code != 200 {
+		t.Fatalf("demo 投递失败 %d: %s", w.Code, w.Body)
+	}
+	if w := f.do(t, "POST", "/tg/demo", second,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"}); w.Code != 200 {
+		t.Fatalf("demo 第二次投递失败 %d: %s", w.Code, w.Body)
+	}
+	if w := f.do(t, "POST", "/tg/other", sampleUpdate,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret-2"}); w.Code != 200 {
+		t.Fatalf("other 投递失败 %d: %s", w.Code, w.Body)
+	}
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/pending-count", 3},
+		{"/pending-count?bridge=demo", 2},
+		{"/pending-count?bridge=other", 1},
+	} {
+		w := f.do(t, "GET", tc.path, "", nil)
+		if w.Code != 200 {
+			t.Fatalf("%s 返回 %d: %s", tc.path, w.Code, w.Body)
+		}
+		var res struct {
+			Pending int `json:"pending"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatalf("%s 解析失败: %v", tc.path, err)
+		}
+		if res.Pending != tc.want {
+			t.Fatalf("%s 应为 %d，实际 %d", tc.path, tc.want, res.Pending)
+		}
+	}
+
+	// slug 写错要 404：hook 守着永远为 0 的数字，比报错更难发现。
+	if w := f.do(t, "GET", "/pending-count?bridge=nope", "", nil); w.Code != 404 {
+		t.Fatalf("未知 slug 应 404，实际 %d", w.Code)
+	}
+
+	// 令牌优先于 slug：带着 demo 的令牌却写了 other 的 slug，仍按令牌算 2。
+	w := f.do(t, "GET", "/pending-count?bridge=other", "", f.auth())
+	if !strings.Contains(w.Body.String(), `"pending":2`) {
+		t.Fatalf("令牌应优先于 slug，实际 %s", w.Body)
+	}
+}
+
 func TestWebhookRejectsWrongSecret(t *testing.T) {
 	f := newFixture(t)
 	w := f.do(t, "POST", "/tg/demo", sampleUpdate,
@@ -965,7 +1033,7 @@ func TestOnboardPromptHasURLAndNoToken(t *testing.T) {
 	// 提示词是用户定稿的那一份：要能独立转发，所以地址在、凭据不在。
 	for _, want := range []string{
 		"https://bridge.test", "api_hosts", "bearer_header",
-		"/pending-count", "/poll?limit=5", "/reply", "/stats", "muse-bridge.py",
+		"/pending-count?bridge=demo", "/poll?limit=5", "/reply", "/stats", "muse-bridge.py",
 		// 唤醒靠 hook：每 5 秒查一次公开端点，名字要和仓库里的样例一致。
 		"muse-bridge-pending", "每 5 秒",
 		// reply 的形状要和真实接口一致：id 就叫 id，mode 只有 draft / final。

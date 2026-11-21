@@ -77,6 +77,14 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // handlePendingCount 返回可认领的消息数。
 //
+// 三种调用方式，按优先级：
+//  1. 带 Bearer 令牌：只算令牌所属的桥；
+//  2. 不带令牌但带 ?bridge=<slug>：只算这一座桥。hook 用这个，
+//     否则任何一座桥有消息，所有装了这个 hook 的 agent 都会被叫醒，
+//     醒来却在自己的队列里什么也领不到（每个 agent 的 poll 有令牌隔离）。
+//     slug 不是凭据——它本来就印在详情页上，只能读到一个数字；
+//  3. 两者都没有：所有 active 桥合计，兼容 v1 的 hook。
+//
 // 每次先回收过期租约：v1 的死锁就是因为回收只藏在 /poll 里，
 // 而 /poll 只在 pending>0 时才被调用，agent 崩溃后队列永远不清零。
 func (s *Server) handlePendingCount(w http.ResponseWriter, r *http.Request) {
@@ -87,14 +95,28 @@ func (s *Server) handlePendingCount(w http.ResponseWriter, r *http.Request) {
 		n   int
 		err error
 	)
-	if token := bearer(r); token != "" {
+	token := bearer(r)
+	switch slug := r.URL.Query().Get("bridge"); {
+	case token != "":
 		b, _, rerr := s.st.ResolveToken(r.Context(), hashToken(token))
 		if rerr != nil {
 			writeErr(w, http.StatusUnauthorized, "令牌无效或已吊销")
 			return
 		}
 		n, err = s.svc.Queue.PendingCount(r.Context(), b.ID, now)
-	} else {
+	case slug != "":
+		b, berr := s.st.GetBridgeBySlug(r.Context(), slug)
+		if berr != nil {
+			// 404 而不是 0：把 slug 写错时 hook 能立刻看出来，不会被
+			// 一个永远为 0 的数字蒙过去。
+			writeErr(w, http.StatusNotFound, "bridge not found")
+			return
+		}
+		// 暂停的桥不发任务，按 0 报，免得 hook 空转。
+		if b.Status == "active" {
+			n, err = s.svc.Queue.PendingCount(r.Context(), b.ID, now)
+		}
+	default:
 		bridges, lerr := s.st.ListBridges(r.Context())
 		if lerr != nil {
 			writeErr(w, http.StatusInternalServerError, lerr.Error())

@@ -4,14 +4,23 @@
 #
 # 与 v1 完全一致的机制（经过实测），只是地址换成了自己的桥。
 # 只调用匿名的 /pending-count，只返回一个数字，不携带任何令牌。
+#
+# 一定要带上 bridge=<slug>：不带参数时返回的是所有桥的合计，别的桥有活
+# 也会唤醒你，而你 poll 的时候只领得到自己这座桥的消息，等于白跑一轮。
 set -euo pipefail
 source "$HATCH_HOOK_RUNTIME"
 
 BRIDGE_URL="${MUSE_BRIDGE_URL:-https://bridge.example.com}"
+BRIDGE_SLUG="${MUSE_BRIDGE_SLUG:-}"
 STATE_FILE="$HOME/hooks/state/telegram-pending.json"
 DRY_RUN="${HATCH_HOOK_DRY_RUN:-0}"
 
-resp=$(curl --fail --silent --show-error --max-time 10 "$BRIDGE_URL/pending-count" || true)
+count_url="$BRIDGE_URL/pending-count"
+if [ -n "$BRIDGE_SLUG" ]; then
+  count_url="$count_url?bridge=$BRIDGE_SLUG"
+fi
+
+resp=$(curl --fail --silent --show-error --max-time 10 "$count_url" || true)
 if [ -z "$resp" ]; then
   log "fetch_failed" '{}'
   silent "bridge unreachable"

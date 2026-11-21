@@ -118,7 +118,7 @@ Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/pending-count` | 待处理数。**可匿名**，hook 用；带令牌时只统计该桥 |
+| GET | `/pending-count?bridge=<slug>` | 待处理数。**可匿名**，hook 用；带 `bridge` 只统计该桥，带令牌时只统计令牌所属的桥 |
 | GET | `/poll?limit=5&lease_seconds=180` | 认领，返回 `messages[]` + `lease_id` |
 | POST | `/ack` | `{ids:[], lease_id}` |
 | POST | `/fail` | `{id, lease_id, error}`，指数退避，超限进死信 |
@@ -127,6 +127,10 @@ Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 | POST | `/reply` | `{id, lease_id, text, mode:draft\|final, parse_mode}`，默认自动 ack |
 
 `/poll` 返回的每条消息都带自己的 `lease_id`，避免两批消息混在一起时 ack 用错租约。
+
+`/pending-count` 不带参数时返回所有 active 桥的合计；hook 必须带 `?bridge=<slug>`，
+否则任何一座桥有消息都会唤醒所有 agent，而它们 `poll` 时只领得到自己那座桥的消息，等于白跑。
+`slug` 只是公开标识（详情页标题旁就印着），只能读到一个数字，不是凭据。
 
 `/reply` 的任务 id 字段是 `id`；`mode` 只能是 `draft` 或 `final`，省略按 `final` 处理
 （`draft` 建占位消息、后续调用编辑同一条，`final` 定稿并自动 ack）。字段名写错会被拒（400），
