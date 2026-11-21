@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 每 5 秒检查桥里是否有待处理消息，有则唤醒 agent 回复。
+# Muse 里的 hook 名建议用 muse-bridge-pending，与桥详情页的接入提示词保持一致。
 #
 # 与 v1 完全一致的机制（经过实测），只是地址换成了自己的桥。
 # 只调用匿名的 /pending-count，只返回一个数字，不携带任何令牌。

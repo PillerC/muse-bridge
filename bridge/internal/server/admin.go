@@ -702,6 +702,12 @@ func onboardPrompt(base string) string {
 - POST /extend {"id":1,"lease_id":"...","lease_seconds":180} → 续租；
 - GET /stats → 队列状态（各状态计数和最近的死信）。
 
+Hook（被唤醒用，建议建一个）：
+- 建一个名为 muse-bridge-pending 的 hook，每 5 秒请求一次 pending-count。这个端点是公开的，不用令牌；
+- pending 为 0 就安静退出，不要产生任何输出；大于 0 就唤醒你，走一遍 poll → reply；
+- 同一批待处理不要反复唤醒自己：上一次唤醒后 90 秒内、且数量没有增加，继续等下一轮；
+- 唤醒只是提示"有活"，具体有哪些消息仍然要靠 poll 认领，不要拿 pending 的数字当消息内容。
+
 每条消息的节奏：
 - pending-count 为 0 就结束这一轮，不要回复任何东西。这个端点是公开的，适合高频轮询；
 - 有消息就 poll 认领；poll 返回空说明已被别的 agent 认领或队列已空，直接结束；
