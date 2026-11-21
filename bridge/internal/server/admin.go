@@ -303,6 +303,11 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// 一个账号都没有时没什么可登的，直接把提交送回初始化页。
+	if n, err := s.st.CountAdmins(r.Context()); err == nil && n == 0 {
+		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		return
+	}
 	ip := clientIP(r)
 	if !limiter.allow(ip) {
 		s.render(w, r, "login.html", pageData{Title: "登录", Error: "尝试次数过多，请 5 分钟后再试"})
