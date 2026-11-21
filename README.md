@@ -26,6 +26,90 @@ flowchart LR
 延迟说明：检测 ≤5 秒，唤醒 + 思考约 37 秒，端到端约 46 秒。瓶颈在每次唤醒
 agent 的启动和思考，检测本身很快。
 
+## 一键部署（推荐）
+
+最简单的办法：把下面这段提示词发给你的 Muse，让它帮你把整个项目部署好。
+
+开始之前，请准备好：
+
+- 一个 Telegram Bot：找 [@BotFather](https://t.me/BotFather) `/newbot` 创建，
+  记下用户名；token（BOT_TOKEN）先不要发给任何人，部署时 Muse 会给你安全页面链接，
+  你在页面里填写
+- 一个 Cloudflare 账号（部署时会让你登录，免费额度够用）
+
+然后复制下面的提示词（也可以直接复制 [PROMPT.md](PROMPT.md) 全文），发给你的 Muse：
+
+```text
+# 部署 telegram-muse-bridge
+
+请帮我把这个项目部署好：https://github.com/goojia/telegram-muse-bridge
+
+部署完成后，我在 Telegram 上私聊我的 Bot 发消息，你要能收到并回复我；
+群里 @ Bot 或引用 Bot 的消息，你也要能回复。
+
+## 我已经准备好的
+
+- Telegram Bot 用户名：@（把这里换成你的 Bot 用户名）
+- 一个 Cloudflare 账号（部署 Worker + D1 用，免费额度够用）
+- Bot 的 token（BOT_TOKEN）：你需要的时候，我会通过你给我的安全页面填写，
+  我不会直接发在聊天里
+
+## 请按以下步骤部署
+
+1. **准备仓库和环境**：把上面那个仓库克隆到你的工作区（如果已经有了就直接用）。
+   确认环境里有 Node.js 18+、npm 和 wrangler，没有的话先装好
+   （`npm i -g wrangler`）。如果 wrangler 需要登录，用浏览器完成 Cloudflare
+   登录，需要我输入账号密码时告诉我。
+2. **部署 Worker + D1**：
+   - `cd worker && npm install`
+   - `wrangler d1 create telegram-queue`，把返回的 database_id 填进
+     `wrangler.toml`，并把 `BOT_USERNAME` 改成我的 Bot 用户名
+   - `npm run db:migrate` 导入表结构
+   - 生成两个随机 token（32 字符以上）：`WEBHOOK_SECRET` 和 `POLLER_TOKEN`，
+     用 `wrangler secret put` 分别设置（经 stdin 提供，不要写进任何文件）
+   - `npm run deploy`，记下 Worker 地址，然后 `curl <地址>/health` 验证通过
+3. **注册两个自定义连接器**（走你自己的 custom_connector_setup 流程，
+   密钥存在安全存储里）：
+   - 把仓库里 `muse-connectors/` 下的两个目录复制到
+     `~/workspace/custom-connectors/` 下
+   - 把 `custom.telegram-queue/bin/telegram-queue.py` 里的 Worker 地址占位符
+     改成实际的 Worker 地址（`HOSTS` 和 `BASE` 两处）
+   - 注册 `telegram-bot-api`：host 为 `api.telegram.org`，api_key，
+     放在 URL 路径 `url_path_segment:/bot{}/`；注册时给我安全页面链接，
+     我在页面里填 BOT_TOKEN
+   - 注册 `telegram-queue`：host 为 Worker 地址，api_key，`bearer_header`；
+     注册时给我安全页面链接，我在页面里填 POLLER_TOKEN
+   - 注册完后用 `get-me` 和 `stats` 验证两个连接器都能正常调用
+   - 注意：`telegram-bot.py` 里代理是原样放进 URL 路径的，不要改成转码，
+     否则 Telegram 会返回 404（仓库 README 的"踩过的坑"里有说明）
+4. **设置 Telegram webhook**：用连接器调
+   `telegram-bot.py set-webhook --url <Worker 地址>/telegram-webhook --secret <WEBHOOK_SECRET>`，
+   用返回结果确认成功。
+5. **创建 hook**：
+   - 把 `hooks/telegram-pending.sh` 复制到 `~/hooks/scripts/`，
+     把里面的 `WORKER_URL` 改成实际的 Worker 地址
+   - 用 `hooks/worker-prompt.md` 里的指令创建一个 hook（5 秒间隔），
+     先 dry run 确认检测脚本工作正常，再启用
+6. **测试**：告诉我可以测试了，我会在 Telegram 私聊给 Bot 发一条消息；
+   你确认消息被处理并 ack 后，告诉我实测延迟。
+
+## 安全要求（必须遵守）
+
+- 绝不要让我把任何 token 直接发在聊天里；需要我提供 token 时，
+  一律用安全页面链接让我填写
+- 绝不要把任何密钥写进文件、记忆、日志或对话摘要；生成的随机 token
+  只经环境变量或 stdin 临时使用
+- 部署完成后告诉我：延迟预期（约 40 秒）、如何使用、以及以后怎么看队列状态
+
+## 如果遇到问题
+
+- 哪一步卡住了就停下来告诉我具体是哪一步、报错是什么，不要跳过
+- 不要为了赶进度省略验证步骤
+```
+
+部署过程中需要你配合的地方只有两处：在安全页面里填两个 token，
+以及 Cloudflare 登录。其他步骤 Muse 都会自己完成。
+
 ## 回复规则
 
 | 场景 | 是否回复 |
@@ -92,7 +176,6 @@ npm run db:migrate
 # 敏感值用 secret 设置（不要写进 wrangler.toml，不要提交到 git）
 wrangler secret put WEBHOOK_SECRET   # 随机 32+ 字符，Telegram webhook 校验用
 wrangler secret put POLLER_TOKEN     # 随机 32+ 字符，拉取鉴权用
-wrangler secret put BOT_TOKEN        # 仅 /admin/set-webhook 需要
 
 npm run deploy
 # 记下地址，如 https://telegram-queue.<your-subdomain>.workers.dev
@@ -105,22 +188,7 @@ curl https://<你的worker>/health
 # {"ok":true,"db":"up",...}
 ```
 
-### 2. 把 Telegram webhook 指到 Worker
-
-```bash
-curl -X POST https://<你的worker>/admin/set-webhook \
-  -H "Authorization: Bearer <POLLER_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"webhook_url": "https://<你的worker>/telegram-webhook", "drop_pending_updates": true}'
-# 返回 {"ok":true,...} 即成功
-```
-
-也可以直接调 Bot API（效果相同，记得带上和 `WEBHOOK_SECRET` 一样的 `secret_token`）。
-
-群组隐私：BotFather 里保持 Privacy Mode 开启即可，本设计只依赖 @ 和引用
-触发，开着也能收到这两类消息；关掉则 Bot 能看到群里全部消息，本设计不需要。
-
-### 3. 接入 Muse hook
+### 2. 注册连接器
 
 1. 把 `muse-connectors/` 下的两个目录复制到 Muse 工作区的
    `~/workspace/custom-connectors/` 下。
@@ -132,11 +200,41 @@ curl -X POST https://<你的worker>/admin/set-webhook \
      `url_path_segment:/bot{}/`，填 `BOT_TOKEN`
    - `telegram-queue`：host 为你的 Worker 地址，api_key，`bearer_header`，
      填 `POLLER_TOKEN`
-4. 把 `hooks/telegram-pending.sh` 复制到 `~/hooks/scripts/`，把里面的
+4. 验证：`telegram-bot.py get-me` 和 `telegram-queue.py stats` 都能正常调用。
+
+### 3. 设置 Telegram webhook
+
+```bash
+python3 ~/workspace/custom-connectors/custom.telegram-bot-api/bin/telegram-bot.py set-webhook \
+  --url https://<你的worker>/telegram-webhook \
+  --secret <WEBHOOK_SECRET> \
+  --drop-pending-updates
+# 返回 {"ok":true,...} 即成功
+```
+
+`--secret` 填的必须和 Worker 的 `WEBHOOK_SECRET` 一致，Telegram 凭它签名
+每次投递；`--drop-pending-updates` 会丢弃设 webhook 之前发来的消息。
+
+替代办法：如果不想用连接器，也可以把 `BOT_TOKEN` 设为 Worker secret
+（`wrangler secret put BOT_TOKEN`），再调 Worker 的 `/admin/set-webhook`：
+
+```bash
+curl -X POST https://<你的worker>/admin/set-webhook \
+  -H "Authorization: Bearer <POLLER_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"webhook_url": "https://<你的worker>/telegram-webhook", "drop_pending_updates": true}'
+```
+
+群组隐私：BotFather 里保持 Privacy Mode 开启即可，本设计只依赖 @ 和引用
+触发，开着也能收到这两类消息；关掉则 Bot 能看到群里全部消息，本设计不需要。
+
+### 4. 创建 hook
+
+1. 把 `hooks/telegram-pending.sh` 复制到 `~/hooks/scripts/`，把里面的
    `WORKER_URL` 改成你的 Worker 地址。
-5. 用 `hooks/worker-prompt.md` 里的指令创建一个 hook（5 秒间隔），先 dry run
+2. 用 `hooks/worker-prompt.md` 里的指令创建一个 hook（5 秒间隔），先 dry run
    确认检测脚本工作正常，再启用。
-6. 私聊给 Bot 发一条消息测试：应看到 typing、占位消息，然后收到回复。
+3. 私聊给 Bot 发一条消息测试：应看到 typing、占位消息，然后收到回复。
 
 ## 运维
 

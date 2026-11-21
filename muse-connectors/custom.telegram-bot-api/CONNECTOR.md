@@ -79,6 +79,16 @@ python3 ~/workspace/custom-connectors/custom.telegram-bot-api/bin/telegram-bot.p
 
 - The output has `ok` and a `result` with the edited message. Use `--text-file` with a file path instead of `--text` for long messages. Verified end to end in the reference deployment.
 
+## Set the webhook
+
+- `set-webhook` points Telegram at the Worker webhook URL. Use it once during setup.
+
+```text
+python3 ~/workspace/custom-connectors/custom.telegram-bot-api/bin/telegram-bot.py set-webhook --url <worker-url>/telegram-webhook --secret <webhook-secret> --drop-pending-updates
+```
+
+- The output has `ok` and `result`. Pass `--secret` with the same value as the Worker `WEBHOOK_SECRET` so Telegram signs its deliveries. Pass `--drop-pending-updates` to discard messages sent before the webhook was set. Untested through this connector.
+
 ## Recover from errors
 
 - A 404 Not Found means the token in the URL path was malformed. With this connector it means the surrogate was not swapped, so confirm the helper inserts the surrogate raw and the request goes through the egress proxy.
@@ -93,7 +103,7 @@ python3 ~/workspace/custom-connectors/custom.telegram-bot-api/bin/telegram-bot.p
 
 - The connector only calls api.telegram.org. It does not manage the webhook or the message queue, which live in the Cloudflare Worker and are reached through custom.telegram-queue.
 
-- The helper implements four Bot API methods only. Other Bot API methods are untested through this connector.
+- The helper implements five Bot API methods only. Other Bot API methods are untested through this connector.
 
 ## Related skills
 

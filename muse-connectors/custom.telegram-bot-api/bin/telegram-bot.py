@@ -21,6 +21,7 @@ Usage:
   python3 telegram-bot.py send-message --chat-id <id> --text-file /tmp/reply.txt
   python3 telegram-bot.py edit-message --chat-id <id> --message-id <id> --text "..."
   python3 telegram-bot.py edit-message --chat-id <id> --message-id <id> --text-file /tmp/reply.txt
+  python3 telegram-bot.py set-webhook --url <worker-url>/telegram-webhook --secret <webhook-secret> [--drop-pending-updates]
 
 --text-file reads the message text from a file instead of the command line.
 Use it for long replies so shell quoting cannot mangle the text.
@@ -126,6 +127,10 @@ def main():
     e.add_argument("--message-id", required=True, type=int)
     e.add_argument("--text")
     e.add_argument("--text-file")
+    w = sub.add_parser("set-webhook")
+    w.add_argument("--url", required=True)
+    w.add_argument("--secret", default=None)
+    w.add_argument("--drop-pending-updates", action="store_true")
     args = parser.parse_args()
     try:
         if args.cmd == "get-me":
@@ -149,6 +154,13 @@ def main():
                     "text": message_text(args),
                 },
             )
+        elif args.cmd == "set-webhook":
+            payload = {"url": args.url, "allowed_updates": ["message"]}
+            if args.secret:
+                payload["secret_token"] = args.secret
+            if args.drop_pending_updates:
+                payload["drop_pending_updates"] = True
+            result = call("setWebhook", payload)
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("ok") else 1
     except DynamicCredentialError as exc:
