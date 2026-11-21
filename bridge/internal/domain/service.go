@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -70,7 +71,34 @@ func (s *Service) IngestUpdate(ctx context.Context, b *store.Bridge, up *tg.Upda
 		return IngestResult{Reason: "no_message"}, nil
 	}
 
-	verdict := Classify(m, Bot{ID: b.BotID, Username: b.BotUsername}, parseIDs(b.AllowedUserIDs))
+	bot := Bot{ID: b.BotID, Username: b.BotUsername}
+	allowed := parseIDs(b.AllowedUserIDs)
+
+	// 名单为空 = 这座桥还没人认领：第一个真正发来消息的人自动成为唯一允许者。
+	//
+	// 三个限定条件都是必要的：
+	//   - 只认 trigger 成立的消息。关掉 privacy mode 的群里，非 @ 的闲聊
+	//     也会到达 webhook，若拿它来绑定，随便谁聊一句就把桥认领走了；
+	//   - 只认真人，机器人和频道身份（from 为 nil）不能绑定；
+	//   - 绑定是一次带条件的 UPDATE，两个陌生人同时发消息时只有一个人抢得到。
+	if len(allowed) == 0 && m.From != nil && !m.From.IsBot && trigger(m, bot).ShouldReply {
+		ok, err := s.Store.ClaimFirstSender(ctx, b.ID, m.From.ID, now)
+		switch {
+		case err != nil:
+			log.Printf("%s 绑定首个发送者失败: %v", b.Slug, err)
+		case ok:
+			allowed = []int64{m.From.ID}
+			log.Printf("%s 已绑定第一个发送者 %d（%s）", b.Slug, m.From.ID, m.From.DisplayName())
+		default:
+			// 抢输了：同时还有别人在发消息，并且已经先绑上了。
+			// 重新读一次，按库里的真实名单来判断这条消息。
+			if fresh, ferr := s.Store.GetBridgeByID(ctx, b.ID); ferr == nil {
+				allowed = parseIDs(fresh.AllowedUserIDs)
+			}
+		}
+	}
+
+	verdict := Classify(m, bot, allowed)
 	switch verdict.Reason {
 	case "no_allowed_users", "no_sender", "user_not_allowed":
 		s.noteBlocked(b, m, now)

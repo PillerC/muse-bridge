@@ -821,19 +821,73 @@ func TestWebhookDropsUnknownSender(t *testing.T) {
 	}
 }
 
-// 配置空的桥不接收任何消息，且详情页要点明这一点。
-func TestEmptyAllowListReceivesNothing(t *testing.T) {
+// 空名单 = 等待认领：第一个发消息的人被自动绑定，之后就只认这个人。
+func TestEmptyAllowListBindsFirstSender(t *testing.T) {
 	f := newFixture(t)
-	f.bridge.AllowedUserIDs = ""
 	if err := f.st.UpdateBridgeSettings(t.Context(), f.bridge.ID, f.bridge.Name, "", f.bridge.Mode, time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
+
 	w := f.do(t, "POST", "/tg/demo", sampleUpdate,
 		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"})
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"queued":false`) {
-		t.Fatalf("空名单不该排队，实际 %d %s", w.Code, w.Body)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"queued":true`) {
+		t.Fatalf("首个发送者应被接受，实际 %d %s", w.Code, w.Body)
 	}
-	if convs, _ := f.st.ListConversations(t.Context(), f.bridge.ID, 10); len(convs) != 0 {
-		t.Fatal("空名单不该入库")
+	b, err := f.st.GetBridgeByID(t.Context(), f.bridge.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.AllowedUserIDs != "999" {
+		t.Fatalf("应绑定首个发送者 999，实际 %q", b.AllowedUserIDs)
+	}
+
+	// 绑定完成后，换个人来就不行了，而且不入库。
+	const other = `{
+  "update_id": 2002,
+  "message": {
+    "message_id": 9,
+    "from": {"id": 1000, "is_bot": false, "first_name": "别人"},
+    "chat": {"id": 1000, "type": "private"},
+    "date": 1763700000,
+    "text": "我也要用"
+  }
+}`
+	w = f.do(t, "POST", "/tg/demo", other,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"})
+	if !strings.Contains(w.Body.String(), `"reason":"user_not_allowed"`) {
+		t.Fatalf("绑定后的其他人应被拒，实际 %s", w.Body)
+	}
+	if convs, _ := f.st.ListConversations(t.Context(), f.bridge.ID, 10); len(convs) != 1 {
+		t.Fatalf("只应有首个发送者的会话，实际 %d 个", len(convs))
+	}
+}
+
+// 群里的非 @ 闲聊不能用来认领桥：否则谁先在群里说句话，桥就归谁了。
+func TestEmptyAllowListIgnoresGroupChatter(t *testing.T) {
+	f := newFixture(t)
+	if err := f.st.UpdateBridgeSettings(t.Context(), f.bridge.ID, f.bridge.Name, "", f.bridge.Mode, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	const chatter = `{
+  "update_id": 2003,
+  "message": {
+    "message_id": 10,
+    "from": {"id": 1000, "is_bot": false, "first_name": "路人"},
+    "chat": {"id": -100123, "type": "supergroup", "title": "群"},
+    "date": 1763700000,
+    "text": "今天天气不错"
+  }
+}`
+	w := f.do(t, "POST", "/tg/demo", chatter,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"})
+	if w.Code != 200 {
+		t.Fatalf("应回 200，实际 %d", w.Code)
+	}
+	b, err := f.st.GetBridgeByID(t.Context(), f.bridge.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.AllowedUserIDs != "" {
+		t.Fatalf("群闲聊不该完成绑定，实际 %q", b.AllowedUserIDs)
 	}
 }

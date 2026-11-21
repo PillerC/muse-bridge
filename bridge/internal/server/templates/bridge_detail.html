@@ -9,9 +9,12 @@
 {{end}}
 
 {{if not .Data.Bridge.AllowedUserIDs}}
-<div class="card" style="border-color:#f3c7c7;background:#fff7f7">
-  <h2>还没配置用户 ID</h2>
-  <p class="sub" style="margin:0">这座桥现在不接收任何消息。填上允许使用的 Telegram 用户 ID 之后才会开始收。</p>
+<div class="card" style="border-color:#bfd3ff;background:var(--accent-weak)">
+  <h2>等待绑定</h2>
+  <p class="sub" style="margin:0">
+    用你的账号给机器人发一条消息，这个账号就会被自动设为唯一允许的人。
+    在那之前，谁发的消息都不会被接收。
+  </p>
 </div>
 {{end}}
 
@@ -22,7 +25,9 @@
     {{ts .At}} 收到{{if .Name}}{{.Name}}{{else}}未知用户{{end}}{{if .Username}}（@{{.Username}}）{{end}}的消息，
     因为{{if .UserID}}用户 ID <code>{{.UserID}}</code> {{end}}不在允许列表里，已丢弃、没有入库。
   </p>
-  <p class="sub" style="margin:0">如果这就是你，把{{if .UserID}} <code>{{.UserID}}</code> {{else}}上面的 ID {{end}}填进下面的设置保存即可。</p>
+  <p class="sub" style="margin:0">
+    {{if $.Data.Bridge.AllowedUserIDs}}当前只允许 <code>{{$.Data.Bridge.AllowedUserIDs}}</code>。如果这是你，把 ID 加进下面的列表。{{else}}发送者可能是机器人或匿名身份，无法自动绑定，可在下面手动填。{{end}}
+  </p>
 </div>
 {{end}}
 
@@ -58,16 +63,18 @@
       <label>名字</label>
       <input type="text" name="name" value="{{.Data.Bridge.Name}}" required>
       <label>允许的 Telegram 用户 ID</label>
-      <input type="text" name="allowed_user_ids" value="{{.Data.Bridge.AllowedUserIDs}}" inputmode="numeric" required>
+      <input type="text" name="allowed_user_ids" value="{{.Data.Bridge.AllowedUserIDs}}" inputmode="numeric">
       <p class="sub" style="margin:6px 0 0">
-        在 Telegram 里私聊 <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>
-        获取你的数字 ID；多个用逗号隔开。只有这些 ID 发来的消息才会被接收，其他人发的直接丢弃。
+        只有这些 ID 发来的消息才会被接收，其他人发的直接丢弃。
+        留空保存相当于重新认领：下一个给机器人发消息的人会被自动绑定。
+        多个 ID 用逗号隔开，可私聊 <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a> 查自己的。
       </p>
-      <label>收消息方式</label>
+      <label>接收 Telegram 更新的方式</label>
       <select name="mode">
-        <option value="webhook" {{if eq .Data.Bridge.Mode "webhook"}}selected{{end}}>webhook</option>
-        <option value="poll" {{if eq .Data.Bridge.Mode "poll"}}selected{{end}}>长轮询</option>
+        <option value="webhook" {{if eq .Data.Bridge.Mode "webhook"}}selected{{end}}>webhook（Telegram 推送）</option>
+        <option value="poll" {{if eq .Data.Bridge.Mode "poll"}}selected{{end}}>长轮询（桥主动拉取）</option>
       </select>
+      <p class="sub" style="margin:6px 0 0">只影响桥怎么从 Telegram 取消息，Muse 侧始终是 <code>/poll</code> 拉取。</p>
       <div class="row" style="margin-top:16px"><button class="btn primary">保存</button></div>
     </form>
     <form method="post" action="/bridges/{{.Data.Bridge.ID}}/status" style="margin-top:10px">

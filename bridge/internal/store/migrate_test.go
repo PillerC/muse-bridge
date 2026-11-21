@@ -97,3 +97,35 @@ func TestOpenNewDatabaseHasUserIDs(t *testing.T) {
 		t.Fatal("新库应直接带 allowed_user_ids 列")
 	}
 }
+
+// 首个发送者绑定必须是原子的：两个人同时发消息，只能有一个成功。
+func TestClaimFirstSender(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "b.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	id, err := st.CreateBridge(ctx, &Bridge{
+		Slug: "b", Name: "b", BotTokenEnc: "x", WebhookSecret: "s",
+		Mode: "poll", Status: "active", CreatedAt: 1, UpdatedAt: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ok, err := st.ClaimFirstSender(ctx, id, 111, 2); err != nil || !ok {
+		t.Fatalf("第一次绑定应成功: %v %v", ok, err)
+	}
+	if ok, err := st.ClaimFirstSender(ctx, id, 222, 3); err != nil || ok {
+		t.Fatalf("已绑定后不该再改: %v %v", ok, err)
+	}
+	b, err := st.GetBridgeByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.AllowedUserIDs != "111" {
+		t.Fatalf("应保持首个发送者 111，实际 %q", b.AllowedUserIDs)
+	}
+}

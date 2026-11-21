@@ -12,19 +12,22 @@
   <label>机器人 token（从 @BotFather 获取）</label>
   <input type="text" name="bot_token" placeholder="123456789:AA..." required autocomplete="off">
 
-  <label>允许的 Telegram 用户 ID（必填，逗号分隔）</label>
-  <input type="text" name="allowed_user_ids" placeholder="例如：123456789" inputmode="numeric" required>
+  <label>允许的 Telegram 用户 ID（可留空，逗号分隔）</label>
+  <input type="text" name="allowed_user_ids" placeholder="留空 = 第一个发消息的人自动绑定" inputmode="numeric">
   <p class="sub" style="margin:6px 0 0">
-    在 Telegram 里私聊 <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a>，
-    它回你的那串数字就是你的 ID。只有这些 ID 发来的消息才会被接收并交给 Muse，其他人发的直接丢弃、不入库。
-    多个 ID 用逗号隔开。
+    留空就行：建好之后，<b>第一个给机器人发消息的人会自动成为唯一允许的人</b>，此后其他人发的消息直接丢弃、不入库。
+    想指定账号就填它的数字 ID（私聊 <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a> 获取），多个用逗号隔开。
   </p>
 
-  <label>收消息方式</label>
+  <label>接收 Telegram 更新的方式</label>
   <select name="mode">
-    <option value="webhook" {{if eq .Data.DefaultMode "webhook"}}selected{{end}}>webhook（需要域名和 HTTPS）</option>
+    <option value="webhook" {{if eq .Data.DefaultMode "webhook"}}selected{{end}}>webhook（需要域名 + HTTPS）</option>
     <option value="poll" {{if eq .Data.DefaultMode "poll"}}selected{{end}}>长轮询（不需要开放端口）</option>
   </select>
+  <p class="sub" style="margin:6px 0 0">
+    webhook 由 Telegram 主动推给桥，长轮询由桥主动去拉。这只影响桥怎么从 Telegram 取消息，
+    Muse 侧固定用 <code>/pending-count</code> + <code>/poll</code> 拉取，与这里无关。
+  </p>
 
   <div class="row" style="margin-top:20px">
     <button class="btn primary" type="submit">创建并校验 token</button>

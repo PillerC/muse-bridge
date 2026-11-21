@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-var errNoUserIDs = errors.New(
-	"请至少填一个 Telegram 用户 ID：在 Telegram 里私聊 @userinfobot，它回你的那串数字就是")
-
 // parseAllowedUserIDs 把表单里的一串用户 ID 规整成 "123,456"。
+//
+// 空字符串是合法输入：它表示"还没绑定"，第一个给机器人发消息的人会被
+// 自动绑定成唯一允许者（见 domain.IngestUpdate）。
 //
 // 手机输入法很容易打出全角逗号和中文分号，只按半角逗号切会把
 // "123，456" 整个当成一个非法值，所以常见分隔符都认；顺便去重。
@@ -41,7 +41,7 @@ func parseAllowedUserIDs(raw string) (string, error) {
 		out = append(out, strconv.FormatInt(v, 10))
 	}
 	if len(out) == 0 {
-		return "", errNoUserIDs
+		return "", nil
 	}
 	if len(out) > 20 {
 		return "", errors.New("最多填 20 个用户 ID")

@@ -463,6 +463,11 @@ func (s *Server) handleBridgeSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// 清空名单等于重新认领：说清楚会发生什么，否则下一次陌生人发消息
+	// 就把桥绑走了，人只会觉得莫名其妙。
+	if allowed == "" {
+		setFlash(w, "ok", "已清空允许列表：下一个给机器人发消息的人会被自动绑定")
+	}
 	http.Redirect(w, r, "/bridges/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
@@ -745,11 +750,16 @@ func flashFrom(r *http.Request) (string, string) {
 }
 
 // flash 用一个一次性 cookie 传提示，避免把错误塞进 URL 被日志记下来。
-func (s *Server) flash(w http.ResponseWriter, r *http.Request, kind, msg string) {
+// setFlash 把一条一次性提示放进 cookie，下次页面渲染时读出来显示。
+func setFlash(w http.ResponseWriter, kind, msg string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "mb_flash", Value: kind + "|" + msg, Path: "/", MaxAge: 30,
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
+}
+
+func (s *Server) flash(w http.ResponseWriter, r *http.Request, kind, msg string) {
+	setFlash(w, kind, msg)
 	referer := r.Referer()
 	if referer == "" {
 		referer = "/"

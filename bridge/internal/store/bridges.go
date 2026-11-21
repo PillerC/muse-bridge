@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -110,6 +111,26 @@ func (s *Store) UpdateBridgeBot(ctx context.Context, id int64, encToken string, 
 		`UPDATE bridges SET bot_token_enc=?, bot_id=?, bot_username=?, updated_at=? WHERE id=?`,
 		encToken, botID, username, now, id)
 	return err
+}
+
+// ClaimFirstSender 在允许列表为空时把 firstUserID 绑定成唯一允许的人。
+//
+// 用一条带条件的 UPDATE 完成，靠数据库的串行写保证只有一个人能抢到：
+// 两个陌生人同时发消息时，后来的那条会得到 false，然后按"已有名单"处理。
+// 返回 true 表示本次调用完成了绑定。
+func (s *Store) ClaimFirstSender(ctx context.Context, bridgeID, firstUserID, now int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE bridges SET allowed_user_ids=?, updated_at=?
+		  WHERE id=? AND COALESCE(allowed_user_ids,'')=''`,
+		strconv.FormatInt(firstUserID, 10), now, bridgeID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // UpdateBridgeSettings 更新名字、允许的用户、模式。
