@@ -1,0 +1,31 @@
+{{template "head" .}}
+<h1>{{if .Data.Conversation.Title}}{{.Data.Conversation.Title}}{{else}}{{.Data.Conversation.ChatID}}{{end}}</h1>
+<p class="sub">
+  {{.Data.Bridge.Name}} · <span class="mono">{{.Data.Conversation.ChatType}}</span>
+  · chat_id <span class="mono">{{.Data.Conversation.ChatID}}</span>
+  · <a href="/admin/export?bridge_id=0&conversation_id={{.Data.Conversation.ID}}">导出这段对话</a>
+  {{if .Data.PrevID}} · <a href="/admin/conversations/{{.Data.Conversation.ID}}?before={{.Data.PrevID}}">更早</a>{{end}}
+</p>
+
+<div class="card">
+  {{if .Data.Messages}}
+  <div class="chat">
+    {{range .Data.Messages}}
+    <div class="bubble {{if eq .Direction "out"}}out{{end}}">
+      <div class="meta">
+        {{if eq .Direction "out"}}Muse · 机器人{{else}}{{if .SenderName}}{{.SenderName}}{{else}}用户{{end}}{{if .SenderUsername}} @{{.SenderUsername}}{{end}}{{end}}
+        · {{ts .CreatedAt}}
+        {{if .JobStatus}} · <span class="pill mute">{{.JobStatus}}</span>{{end}}
+        {{if and (eq .Direction "in") (ne .JobStatus "")}}<span class="pill mute">#{{.ID}}</span>{{end}}
+      </div>
+      {{if .Text}}{{.Text}}{{else}}<span style="color:var(--muted)">{{if .ContentHint}}{{.ContentHint}}{{else}}[{{.ContentKind}}]{{end}}</span>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{else}}
+  <div class="empty">这段对话还没有消息。</div>
+  {{end}}
+</div>
+
+{{if .Data.NextID}}<p><a href="/admin/conversations/{{.Data.Conversation.ID}}">回到最新</a></p>{{end}}
+{{template "foot" .}}

@@ -1,0 +1,134 @@
+{{template "head" .}}
+{{with .Data.Bridge}}
+<h1>{{.Name}}</h1>
+<p class="sub">
+  <span class="mono">{{.Slug}}</span>
+  {{if eq .Status "active"}}<span class="pill ok">运行中</span>{{else}}<span class="pill mute">已暂停</span>{{end}}
+  {{if .BotUsername}}<span class="pill mute">@{{.BotUsername}}</span>{{end}}
+</p>
+{{end}}
+
+{{if .Data.NewToken}}
+<div class="card" style="border-color:#bfd3ff;background:var(--accent-weak)">
+  <h2>新令牌（只显示这一次）</h2>
+  <p class="sub" style="margin-bottom:10px">把这个令牌和下面的接入地址发给 Muse，让它自己接入。关掉页面就再也看不到明文了。</p>
+  <div class="token">{{.Data.NewToken}}</div>
+</div>
+{{end}}
+
+<div class="split">
+  <div class="card">
+    <h2>接入信息</h2>
+    <label>接入地址</label>
+    <div class="token">{{.Data.BaseURL}}</div>
+    <p class="sub" style="margin:10px 0 0">Muse 用 <code>Authorization: Bearer &lt;令牌&gt;</code> 调用
+      <code>/poll</code>、<code>/reply</code>、<code>/ack</code>。</p>
+
+    {{if .Data.WebhookURL}}
+    <label style="margin-top:18px">Telegram webhook</label>
+    <div class="token">{{.Data.WebhookURL}}</div>
+    <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/webhook" style="margin-top:10px">
+      <button class="btn" name="action" value="set">重新注册 webhook</button>
+      <button class="btn" name="action" value="delete">断开 webhook</button>
+    </form>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <h2>设置</h2>
+    <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/settings">
+      <label>名字</label>
+      <input type="text" name="name" value="{{.Data.Bridge.Name}}" required>
+      <label>允许的会话 ID（留空不限制）</label>
+      <input type="text" name="allowed_chat_ids" value="{{.Data.Bridge.AllowedChatIDs}}">
+      <label>收消息方式</label>
+      <select name="mode">
+        <option value="webhook" {{if eq .Data.Bridge.Mode "webhook"}}selected{{end}}>webhook</option>
+        <option value="poll" {{if eq .Data.Bridge.Mode "poll"}}selected{{end}}>长轮询</option>
+      </select>
+      <div class="row" style="margin-top:16px"><button class="btn primary">保存</button></div>
+    </form>
+    <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/status" style="margin-top:10px">
+      {{if eq .Data.Bridge.Status "active"}}
+      <button class="btn" name="status" value="paused">暂停这座桥</button>
+      {{else}}
+      <button class="btn primary" name="status" value="active">恢复运行</button>
+      {{end}}
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:10px">
+    <h2 style="margin:0">令牌</h2>
+    <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/tokens" style="margin:0">
+      <button class="btn">签发新令牌</button>
+    </form>
+  </div>
+  {{if .Data.Tokens}}
+  <table>
+    <thead><tr><th>标签</th><th>前缀</th><th>最近使用</th><th>状态</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Tokens}}
+      <tr>
+        <td>{{if .Label}}{{.Label}}{{else}}<span style="color:var(--muted)">默认</span>{{end}}</td>
+        <td class="mono">{{.TokenPrefix}}…</td>
+        <td>{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}<span style="color:var(--muted)">从未</span>{{end}}</td>
+        <td>{{if .RevokedAt}}<span class="pill mute">已吊销</span>{{else}}<span class="pill ok">有效</span>{{end}}</td>
+        <td>{{if not .RevokedAt}}
+          <form method="post" action="/admin/bridges/{{$.Data.Bridge.ID}}/tokens/{{.ID}}/revoke" style="margin:0">
+            <button class="btn danger">吊销</button>
+          </form>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<div class="empty">还没有令牌。</div>{{end}}
+</div>
+
+<div class="card">
+  <h2>会话</h2>
+  {{if .Data.Conversations}}
+  <ul class="list">
+    {{range .Data.Conversations}}
+    <li>
+      <div class="grow">
+        <a href="/admin/conversations/{{.ID}}">{{if .Title}}{{.Title}}{{else}}{{.ChatID}}{{end}}</a>
+        <span class="pill mute">{{.ChatType}}</span>
+        {{if .PendingCount}}<span class="pill warn">待处理 {{.PendingCount}}</span>{{end}}
+      </div>
+      <span style="color:var(--muted);font-size:12px">{{.MessageCount}} 条 · {{ts .LastMessageAt}}</span>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}<div class="empty">还没有收到消息。把机器人拉进对话，发一条试试。</div>{{end}}
+</div>
+
+{{if .Data.DeadJobs}}
+<div class="card">
+  <h2>死信</h2>
+  <table>
+    <thead><tr><th>时间</th><th>内容</th><th>错误</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.DeadJobs}}
+      <tr>
+        <td class="mono">{{ts .UpdatedAt}}</td>
+        <td style="max-width:300px">{{truncate .Text 100}}</td>
+        <td style="max-width:200px;color:var(--err)">{{truncate .LastError 80}}</td>
+        <td><form method="post" action="/admin/jobs/{{.JobID}}/replay" style="margin:0"><button class="btn">重放</button></form></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+<div class="card" style="border-color:#f3c7c7">
+  <h2 style="color:var(--err)">删除桥</h2>
+  <p class="sub">会连同该桥的全部会话、消息、令牌一起删除，不可恢复。只是想停用的话用上面的「暂停」。</p>
+  <form method="post" action="/admin/bridges/{{.Data.Bridge.ID}}/delete"
+        onsubmit="return confirm('确认删除这座桥及其全部聊天记录？此操作不可恢复。')">
+    <button class="btn danger">永久删除</button>
+  </form>
+</div>
+{{template "foot" .}}

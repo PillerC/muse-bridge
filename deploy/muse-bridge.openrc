@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# Alpine OpenRC 服务定义。放在 /etc/init.d/muse-bridge，chmod +x 后 rc-update add。
+
+name="muse-bridge"
+description="Muse Bridge (Telegram <-> Muse)"
+
+command="/data/bridge/bridge"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+respawn_delay=5
+respawn_max=0
+
+output_log="/data/log/muse-bridge.log"
+error_log="/data/log/muse-bridge.err"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath --directory --owner root --mode 0755 /data/log
+    checkpath --directory --owner root --mode 0700 /data/bridge-data
+    # 密钥只放在 0600 的文件里，不写进 conf.d。
+    if [ -r /etc/muse-bridge.env ]; then
+        set -a
+        # shellcheck disable=SC1091
+        . /etc/muse-bridge.env
+        set +a
+    fi
+}

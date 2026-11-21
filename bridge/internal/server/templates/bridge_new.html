@@ -1,0 +1,33 @@
+{{template "head" .}}
+<h1>新建桥</h1>
+<p class="sub">一座桥连接一个 Telegram 机器人和一个 Muse 实例。机器人 token 会加密存储，Muse 永远看不到它。</p>
+
+<form class="card" method="post" action="/admin/bridges">
+  <label>桥名字</label>
+  <input type="text" name="name" placeholder="例如：小助手 / 客服一号" required>
+
+  <label>slug（用于 webhook 地址，只能小写字母、数字和连字符）</label>
+  <input type="text" name="slug" placeholder="例如：assistant" pattern="[a-z0-9][a-z0-9-]{1,30}" required>
+
+  <label>机器人 token（从 @BotFather 获取）</label>
+  <input type="text" name="bot_token" placeholder="123456789:AA..." required autocomplete="off">
+
+  <label>允许的会话 ID（可选，逗号分隔；留空表示不限制）</label>
+  <input type="text" name="allowed_chat_ids" placeholder="例如：-1001234567890, 12345678">
+
+  <label>收消息方式</label>
+  <select name="mode">
+    <option value="webhook" {{if eq .Data.DefaultMode "webhook"}}selected{{end}}>webhook（需要域名和 HTTPS）</option>
+    <option value="poll" {{if eq .Data.DefaultMode "poll"}}selected{{end}}>长轮询（不需要开放端口）</option>
+  </select>
+
+  <div class="row" style="margin-top:20px">
+    <button class="btn primary" type="submit">创建并校验 token</button>
+    <a class="btn" href="/admin">取消</a>
+  </div>
+  <p class="sub" style="margin:16px 0 0">
+    创建时会调用 <code>getMe</code> 校验 token，并生成接入令牌和 webhook secret。
+    {{if .Data.PublicURL}}当前公网地址：<code>{{.Data.PublicURL}}</code>{{else}}尚未配置 <code>BRIDGE_PUBLIC_URL</code>，只能使用长轮询。{{end}}
+  </p>
+</form>
+{{template "foot" .}}

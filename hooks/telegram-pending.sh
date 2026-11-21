@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
-# 每 5 秒检查 Telegram 队列是否有待处理消息, 有则唤醒 agent 回复。
-# 只调公开的 /pending-count (仅返回一个数字, 无消息内容), 不含任何密钥。
+# 每 5 秒检查桥里是否有待处理消息，有则唤醒 agent 回复。
+#
+# 与 v1 完全一致的机制（经过实测），只是地址换成了自己的桥。
+# 只调用匿名的 /pending-count，只返回一个数字，不携带任何令牌。
 set -euo pipefail
 source "$HATCH_HOOK_RUNTIME"
 
-WORKER_URL="https://telegram-queue.<your-subdomain>.workers.dev"  # 改成你的 Worker 地址
+BRIDGE_URL="${MUSE_BRIDGE_URL:-https://bridge.example.com}"
 STATE_FILE="$HOME/hooks/state/telegram-pending.json"
 DRY_RUN="${HATCH_HOOK_DRY_RUN:-0}"
 
-resp=$(curl --fail --silent --show-error --max-time 10 "$WORKER_URL/pending-count" || true)
+resp=$(curl --fail --silent --show-error --max-time 10 "$BRIDGE_URL/pending-count" || true)
 if [ -z "$resp" ]; then
   log "fetch_failed" '{}'
-  silent "worker unreachable"
+  silent "bridge unreachable"
   exit 0
 fi
 
 pending=$(printf '%s' "$resp" | jq -r '.pending // 0' 2>/dev/null || echo 0)
 now=$(date +%s)
 
-# 读上次状态 (last_wake_at, last_count), 缺失则默认为 0
 last_wake=0
 last_count=0
 if [ -f "$STATE_FILE" ]; then
@@ -39,8 +40,7 @@ if [ "$pending" -le 0 ]; then
   exit 0
 fi
 
-# 有待处理消息: 距上次唤醒超过 90 秒, 或数量比上次多 (新消息到了), 就唤醒。
-# 90 秒静默期避免同一个长处理反复唤醒多个 agent; 租约机制保证重复唤醒也不会重复回复。
+# 90 秒静默期避免同一个长处理反复唤醒；租约机制保证重复唤醒也不会重复回复。
 if [ $((now - last_wake)) -ge 90 ] || [ "$pending" -gt "$last_count" ]; then
   write_state "$now" "$pending"
   wake "telegram_pending" "{\"pending\":$pending,\"detected_at\":$now}"

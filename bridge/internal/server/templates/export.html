@@ -1,0 +1,25 @@
+{{template "head" .}}
+<h1>导出聊天记录</h1>
+<p class="sub">按桥、会话或时间范围导出。CSV 用 UTF-8 BOM，Excel 直接打开不会乱码。</p>
+
+<form class="card" method="get" action="/admin/export">
+  <label>桥</label>
+  <select name="bridge_id">
+    <option value="0">全部桥</option>
+    {{range .Data.Bridges}}<option value="{{.ID}}">{{.Name}}（{{.Slug}}）</option>{{end}}
+  </select>
+
+  <label>会话 ID（可选，填了只导出这一段）</label>
+  <input type="text" name="conversation_id" placeholder="留空表示该桥的全部会话">
+
+  <div class="split" style="margin-top:4px">
+    <div><label>开始时间（可选）</label><input type="text" name="from" placeholder="2026-11-01 或 2026-11-01 08:00"></div>
+    <div><label>结束时间（可选）</label><input type="text" name="to" placeholder="2026-11-30 23:59"></div>
+  </div>
+
+  <div class="row" style="margin-top:20px">
+    <button class="btn primary" name="format" value="csv">下载 CSV</button>
+    <button class="btn" name="format" value="json">下载 JSON</button>
+  </div>
+</form>
+{{template "foot" .}}

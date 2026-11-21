@@ -1,0 +1,6 @@
+id: "custom.muse-bridge"
+title: "Muse Bridge"
+description: "Claim pending Telegram messages from a Muse Bridge instance, reply through it, and acknowledge the job."
+include_in_prompt: false
+require_auth: true
+aliases: ["telegram bridge", "bridge queue"]
