@@ -3,16 +3,17 @@
  *
  * 数据流:
  *   Telegram --webhook--> Worker /telegram-webhook --入队--> D1
- *   VM 上的 Muse poller --每 5 秒 GET /poll--> Worker --认领--> D1
- *   poller 处理完 --POST /ack 或 /fail--> Worker 更新状态
- *   poller 直接调 api.telegram.org 回复 (typing / 流式编辑), 不经过 Worker,
+ *   Muse hook --每 5 秒查 /pending-count, 有消息唤醒 agent--
+ *   agent --GET /poll--> Worker --认领--> D1
+ *   agent 处理完 --POST /ack 或 /fail--> Worker 更新状态
+ *   agent 直接调 api.telegram.org 回复 (typing / 分段编辑), 不经过 Worker,
  *   避免 Worker 成为回复路径上的瓶颈和单点。
  *
  * 稳定性设计:
  *  - update_id UNIQUE 去重: Telegram 重发 webhook 时 INSERT OR IGNORE, 返回 ok
  *  - 租约 (lease): poll 认领时写 lease_id + claimed_at, 超时未 ack/fail 自动释放回 pending
  *  - 退避重试: fail 时 next_retry_at = now + 2^attempts * 10s, 超 MAX_ATTEMPTS 进 dead
- *  - 过滤在 Worker 和 poller 两侧各做一次 (defense in depth), 群里只回 @ 和引用
+ *  - 过滤在 Worker 入队时完成, 群里只回 @ 和引用
  */
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
@@ -25,7 +26,7 @@ function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
 }
 
-function checkPollerAuth(request, env) {
+function checkQueueAuth(request, env) {
   if (!env.POLLER_TOKEN) return false;
   const auth = request.headers.get("authorization") || "";
   return auth === `Bearer ${env.POLLER_TOKEN}`;
@@ -37,7 +38,7 @@ function normalizeUsername(name) {
 
 /**
  * 判断一条消息是否需要 Muse 回复。
- * 规则 (与 muse-poller/poller.py 的 should_reply 保持一致):
+ * 规则:
  *  - 私聊: 一律回复
  *  - 群组/超级群: 只有 @ 本 Bot, 或引用 (reply) 本 Bot 的消息才回复
  *  - channel 等其他类型: 不回复
@@ -176,7 +177,7 @@ async function handleTelegramWebhook(request, env) {
  * 返回的每条消息都带 lease_id, ack/fail 必须带回相同的 lease_id 才生效。
  */
 async function handlePoll(request, env) {
-  if (!checkPollerAuth(request, env)) {
+  if (!checkQueueAuth(request, env)) {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
   const url = new URL(request.url);
@@ -186,7 +187,7 @@ async function handlePoll(request, env) {
   const leaseId = crypto.randomUUID();
 
   try {
-    // 释放过期租约 (poller 崩溃 / 超时未 ack 时的自愈)
+    // 释放过期租约 (agent 崩溃 / 超时未 ack 时的自愈)
     await env.DB.prepare(
       `UPDATE messages SET status='pending', lease_id=NULL, claimed_at=NULL, updated_at=?
        WHERE status='processing' AND claimed_at IS NOT NULL
@@ -212,7 +213,7 @@ async function handlePoll(request, env) {
       return json({ ok: true, messages: [], lease_id: leaseId });
     }
 
-    // 认领: 只有 status 仍为 pending 才更新成功, 防两个 poller 同时抢到同一条
+    // 认领: 只有 status 仍为 pending 才更新成功, 防两个 agent 同时抢到同一条
     const ids = messages.map((m) => m.id);
     const placeholders = ids.map(() => "?").join(",");
     await env.DB.prepare(
@@ -241,7 +242,7 @@ async function handlePoll(request, env) {
 }
 
 async function handleAck(request, env) {
-  if (!checkPollerAuth(request, env)) {
+  if (!checkQueueAuth(request, env)) {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
   let body;
@@ -271,7 +272,7 @@ async function handleAck(request, env) {
 }
 
 async function handleFail(request, env) {
-  if (!checkPollerAuth(request, env)) {
+  if (!checkQueueAuth(request, env)) {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
   let body;
@@ -322,9 +323,9 @@ async function handleFail(request, env) {
   }
 }
 
-/** POST /extend {id, lease_id, lease_seconds}: 长任务续租, 防处理中途被别的 poller 抢走 */
+/** POST /extend {id, lease_id, lease_seconds}: 长任务续租, 防处理中途被别的 agent 抢走 */
 async function handleExtend(request, env) {
-  if (!checkPollerAuth(request, env)) {
+  if (!checkQueueAuth(request, env)) {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
   let body;
@@ -375,7 +376,7 @@ async function handlePendingCount(request, env) {
 }
 
 async function handleStats(request, env) {
-  if (!checkPollerAuth(request, env)) {
+  if (!checkQueueAuth(request, env)) {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
   try {
@@ -395,7 +396,7 @@ async function handleStats(request, env) {
 
 /** POST /admin/set-webhook {webhook_url}: 帮你调 Bot API 设置 webhook, 需要 BOT_TOKEN */
 async function handleSetWebhook(request, env) {
-  if (!checkPollerAuth(request, env)) {
+  if (!checkQueueAuth(request, env)) {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
   if (!env.BOT_TOKEN) {
