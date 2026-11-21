@@ -1,6 +1,0 @@
-# 本地开发用 (wrangler dev): 复制为 .dev.vars 并填好, 不要提交到 git
-# 生产环境用 wrangler secret put 设置, 不要写进 wrangler.toml
-WEBHOOK_SECRET=
-POLLER_TOKEN=
-# BOT_TOKEN 仅 /admin/set-webhook 需要, 用连接器方式设 webhook 时不需要
-BOT_TOKEN=

@@ -1,6 +1,0 @@
-id: "custom.telegram-queue"
-title: "Telegram Queue"
-description: "Claim, acknowledge and inspect queued Telegram messages from the Cloudflare Worker."
-include_in_prompt: false
-require_auth: true
-aliases: ["telegram message queue"]

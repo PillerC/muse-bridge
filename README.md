@@ -15,16 +15,16 @@ Muse ──poll/reply（Bearer 令牌）──►│  SQLite：双向聊天流�
                                         └──► api.telegram.org（桥代发）
 ```
 
-和 v1（Cloudflare Worker）相比，变的不是机制，是位置和职责：
+机制很简单，全在一个进程里：
 
-- **收消息**：Telegram webhook → 桥入库 → hook 每 5 秒查 `/pending-count` 唤醒 Muse → Muse `/poll` 带租约认领。和 v1 一模一样。
-- **发消息**：Muse 不再直连 Telegram，改为调桥的 `/reply`。这样机器人 token 只在桥里，Muse 永远看不到，同时出站消息也进了记录。
+- **收消息**：Telegram webhook → 桥入库 → hook 每 5 秒查 `/pending-count` 唤醒 Muse → Muse `/poll` 带租约认领。
+- **发消息**：Muse 不直连 Telegram，而是调桥的 `/reply`。这样机器人 token 只在桥里，Muse 永远看不到，同时出站消息也进了记录。
 - **多租户**：每座桥有独立的机器人、独立令牌、独立记录，互不可见。
 
 ## 为什么发消息要过一次桥
 
-v1 让 Muse 直连 `api.telegram.org`，省了一次转发。代价是出站消息没有记录，
-而且 bot token 必须放在 Muse 侧。现在为了让"完整聊天记录"成立，出站必须经过桥。
+如果让 Muse 直连 `api.telegram.org`，可以省一次转发。代价是出站消息没有记录，
+而且 bot token 必须放在 Muse 侧。现在为了让「完整聊天记录」成立，出站必须经过桥。
 
 桥把原来压在 prompt 里的活接了过来：认领即显示「输入中」、4096 字符分段、429 退避、
 Markdown 解析失败回退纯文本、写入库、自动 ack。Muse 只需要产出一段文本。
@@ -96,22 +96,22 @@ https://bridge.example.com/
 
 ### 3. 让 Muse 接入
 
-把 `muse-connectors/custom.muse-bridge/` 装进 Muse，注册连接时填域名，令牌走凭证代理。
-之后：
+详情页的「接入 Muse」卡里，把**提示词**整段复制发给 Muse，再单独把**令牌**给它
+（提示词里不含令牌，是可以随手转发的部分）。提示词里有桥地址、桥标识和调用节奏，
+Muse 照它写一个 HTTP 客户端就能跑，不需要本仓库提供任何客户端代码。
+
+之后用它自检：
 
 ```bash
-python3 muse-bridge.py stats          # 确认连通
-python3 muse-bridge.py poll           # 认领
-python3 muse-bridge.py reply --id 1 --lease-id <id> --text-file reply.txt
+curl -H "Authorization: Bearer <令牌>" https://<域名>/stats     # 确认连通
+curl -H "Authorization: Bearer <令牌>" "https://<域名>/poll?limit=5"
 ```
 
-细节见 `muse-connectors/custom.muse-bridge/CONNECTOR.md`。
 hook 脚本用 `hooks/telegram-pending.sh`，只改 `MUSE_BRIDGE_URL`。
 
 ## API
 
-Muse 用 `Authorization: Bearer <桥令牌>` 调用。前四个与 v1 的响应格式完全一致，
-所以旧 connector 换掉 host 就能跑。
+Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -161,15 +161,9 @@ bridge/           v2 服务端（Go）
   internal/       config / store / domain / tg / server / poller / secret
   scripts/        build.sh 交叉编译
   dist/           构建产物（不进 git）
-web/              （保留）v1 的前端占位
-worker/           v1 Cloudflare Worker，已弃用，仅作对照
-muse-connectors/
-  custom.muse-bridge/   v2 连接器（收 + 发）
-  custom.telegram-queue/  v1 连接器，已弃用
-  custom.telegram-bot-api/ v1 直连 Telegram，已弃用
-hooks/            Muse hook 脚本
+hooks/            Muse hook 脚本（telegram-pending.sh）
 deploy/           OpenRC 服务定义 + 环境变量模板
-docs/             DESIGN.md（设计）、V1-CLOUDFLARE.md（v1 部署）、DEPLOY.md（运维）
+docs/             DESIGN.md（设计与取舍）、DEPLOY.md（运维）
 ```
 
 ## 开发
