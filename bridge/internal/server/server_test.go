@@ -942,6 +942,8 @@ func TestOnboardPromptHasURLAndNoToken(t *testing.T) {
 	for _, want := range []string{
 		"https://bridge.test", "api_hosts", "bearer_header",
 		"/pending-count", "/poll?limit=5", "/reply", "/stats", "muse-bridge.py",
+		// 唤醒靠 hook：每 5 秒查一次公开端点，名字要和仓库里的样例一致。
+		"muse-bridge-pending", "每 5 秒",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("提示词应包含 %q，实际:\n%s", want, prompt)
