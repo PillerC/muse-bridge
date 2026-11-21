@@ -435,6 +435,30 @@ func TestDraftThenFinalEditsSameMessage(t *testing.T) {
 	}
 }
 
+// 早期提示词里写的是 {"job_id":...}，已经发到各个 Muse 手上收不回来，
+// 所以这个拼写要当成 id 的别名认下来，否则它们换个桥就直接 400。
+func TestReplyAcceptsLegacyJobIDField(t *testing.T) {
+	f := newFixture(t)
+	_ = f.do(t, "POST", "/tg/demo", sampleUpdate,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"})
+	w := f.do(t, "GET", "/poll", "", f.auth())
+	var poll struct {
+		LeaseID  string `json:"lease_id"`
+		Messages []struct {
+			ID int64 `json:"id"`
+		} `json:"messages"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &poll)
+
+	body := fmt.Sprintf(`{"job_id":%d,"lease_id":%q,"text":"旧写法"}`, poll.Messages[0].ID, poll.LeaseID)
+	if w := f.do(t, "POST", "/reply", body, f.auth()); w.Code != 200 {
+		t.Fatalf("job_id 应被当作 id 的别名，实际 %d %s", w.Code, w.Body)
+	}
+	if len(f.tg.sent) != 1 {
+		t.Fatalf("应发出一条消息，实际 %v", f.tg.sent)
+	}
+}
+
 func TestLongMessageIsSplit(t *testing.T) {
 	f := newFixture(t)
 	_ = f.do(t, "POST", "/tg/demo", sampleUpdate,
@@ -944,10 +968,17 @@ func TestOnboardPromptHasURLAndNoToken(t *testing.T) {
 		"/pending-count", "/poll?limit=5", "/reply", "/stats", "muse-bridge.py",
 		// 唤醒靠 hook：每 5 秒查一次公开端点，名字要和仓库里的样例一致。
 		"muse-bridge-pending", "每 5 秒",
+		// reply 的形状要和真实接口一致：id 就叫 id，mode 只有 draft / final。
+		// 引号在 textarea 里是 HTML 实体，复制出去浏览器会还原。
+		`&#34;id&#34;:1,&#34;lease_id&#34;`, `&#34;mode&#34;:&#34;final&#34;`, "draft",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("提示词应包含 %q，实际:\n%s", want, prompt)
 		}
+	}
+	// Muse 照抄过这个字段名，写进提示词就会一路错到底。
+	if strings.Contains(prompt, "job_id") {
+		t.Fatal("提示词里任务 id 的字段名是 id，不能写成 job_id")
 	}
 	if strings.Contains(prompt, "mb_test_token") {
 		t.Fatal("提示词里不能出现令牌：它会被整段转发出去")

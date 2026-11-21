@@ -693,10 +693,10 @@ func onboardPrompt(base string) string {
 3. 不要向我要机器人 token —— 它在桥里，Muse 不需要也不该拿到；也不要自己调 Telegram Bot API 发消息，一切发送都走桥的 reply；
 4. 写一个 helper（命名为 muse-bridge.py），实现下面的接口；写好后先跑一次 stats 确认连通，再开始收消息。如果超时，重试一次再判断。
 
-接口（除 pending-count 外都要带 Bearer 令牌；返回都是 JSON，成功时 ok 为 true）：
+接口（除 pending-count 外都要带 Bearer 令牌；任务 id 的字段名就是 id，返回都是 JSON，成功时 ok 为 true）：
 - GET /pending-count（公开，不用令牌）→ {"ok":true,"pending":N}，N 是待处理消息数；
-- GET /poll?limit=5&lease_seconds=180 → 认领待处理消息。每条任务有 job_id、lease_id、lease_seconds，以及消息文本、发送者、chat_id 等字段；lease_seconds 要够覆盖你的思考时间，默认 180 秒；
-- POST /reply {"job_id":1,"lease_id":"...","text":"..."} → 发出回复。桥会自动分段、退避重试并 ack，发完不用再调 ack；
+- GET /poll?limit=5&lease_seconds=180 → 认领待处理消息，返回 {"ok":true,"lease_id":"...","messages":[...]}。每条消息有 id、lease_id，以及消息文本、发送者、chat_id 等字段；lease_seconds 要够覆盖你的思考时间，默认 180 秒；
+- POST /reply {"id":1,"lease_id":"...","text":"...","mode":"final"} → 发出回复。mode 只能是 draft 或 final，省略按 final 处理：draft 先发一条占位消息、后续调用编辑同一条，适合边想边发；final 是定稿。桥会自动分段、退避重试并 ack，发完不用再调 ack；
 - POST /ack {"ids":[1],"lease_id":"..."} → 不回复，直接完成（确实不需要回复的消息用它）；
 - POST /fail {"id":1,"lease_id":"...","error":"..."} → 没能完成，让桥稍后重投；超过上限进死信，后台可重放；
 - POST /extend {"id":1,"lease_id":"...","lease_seconds":180} → 续租；
