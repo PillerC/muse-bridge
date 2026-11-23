@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -74,6 +75,20 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /conversations/{id}", s.withAdmin(s.handleConversation))
 	mux.HandleFunc("GET /export", s.withAdmin(s.handleExportPage))
 	mux.HandleFunc("POST /jobs/{id}/replay", s.withAdmin(s.handleReplay))
+
+	// 升级：查 GitHub Releases、下载、校验、替换后 exec 重启；也可设定时升级。
+	mux.HandleFunc("GET /upgrade", s.withAdmin(s.handleUpgradePage))
+	mux.HandleFunc("POST /upgrade/check", s.withAdmin(s.handleUpgradeCheck))
+	mux.HandleFunc("POST /upgrade/apply", s.withAdmin(s.handleUpgradeApply))
+	mux.HandleFunc("POST /upgrade/config", s.withAdmin(s.handleUpgradeConfig))
+	mux.HandleFunc("POST /upgrade/rollback", s.withAdmin(s.handleUpgradeRollback))
+
+	// 备份：每日归档、上传到 S3/WebDAV、按保留天数清理本地记录。
+	mux.HandleFunc("GET /backup", s.withAdmin(s.handleBackupPage))
+	mux.HandleFunc("POST /backup/save", s.withAdmin(s.handleBackupSave))
+	mux.HandleFunc("POST /backup/test", s.withAdmin(s.handleBackupTest))
+	mux.HandleFunc("POST /backup/run", s.withAdmin(s.handleBackupRun))
+	mux.HandleFunc("POST /backup/upload/{day}", s.withAdmin(s.handleBackupUploadDay))
 
 	// 账号：改用户名和密码。只有登录后能进，改密码要求先验当前密码。
 	mux.HandleFunc("GET /account", s.withAdmin(s.handleAccountPage))
@@ -1017,26 +1032,41 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
 
 // ---------- 小工具 ----------
 
-// flashFrom 取出一次性提示并清掉 cookie。
+// flashFrom 取出一次性提示。
 func flashFrom(r *http.Request) (string, string) {
 	c, err := r.Cookie("mb_flash")
 	if err != nil || c.Value == "" {
 		return "", ""
 	}
-	kind, msg, ok := strings.Cut(c.Value, "|")
+	raw, err := url.QueryUnescape(c.Value)
+	if err != nil {
+		return "", ""
+	}
+	kind, msg, ok := strings.Cut(raw, "|")
 	if !ok {
 		return "", ""
 	}
 	return msg, kind
 }
 
-// flash 用一个一次性 cookie 传提示，避免把错误塞进 URL 被日志记下来。
 // setFlash 把一条一次性提示放进 cookie，下次页面渲染时读出来显示。
+//
+// 值必须 URL 编码：Cookie 头只允许可见 ASCII，中文直接写进去会被
+// net/http 在读取时整条丢弃（日志里能看到 "invalid byte ... dropping"），
+// 于是所有中文提示都显示不出来——升级、保存这类操作的反馈全靠它。
 func setFlash(w http.ResponseWriter, kind, msg string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: "mb_flash", Value: kind + "|" + msg, Path: "/", MaxAge: 30,
+		Name: "mb_flash", Value: url.QueryEscape(kind + "|" + msg), Path: "/", MaxAge: 30,
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// flashTo 只设置一次性提示、不做跳转，由调用方自己决定跳到哪。
+//
+// 需要跳转到固定页面（比如保存设置后回升级页）时用它：
+// s.flash 会跳到 Referer，从别的页面点过来的操作就会被弹回去。
+func (s *Server) flashTo(w http.ResponseWriter, kind, msg string) {
+	setFlash(w, kind, msg)
 }
 
 func (s *Server) flash(w http.ResponseWriter, r *http.Request, kind, msg string) {

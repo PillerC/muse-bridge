@@ -1,0 +1,163 @@
+{{template "head" .}}
+<h1>在线升级</h1>
+<p class="sub">
+  当前版本 <code>{{.Data.Version}}</code>。
+  升级会从 GitHub Releases 下载对应平台的二进制、校验 sha256 后替换自身文件，
+  然后原地重启——PID 不变，systemd / OpenRC / Docker 都不用改配置。
+</p>
+
+{{if .Data.Disabled}}
+<div class="card">
+  <h2>已关闭</h2>
+  <p class="sub" style="margin:0">
+    这个实例设置了 <code>BRIDGE_UPGRADE_DISABLED=1</code>，不提供在线升级入口。
+    需要升级时请手动替换二进制并重启服务。
+  </p>
+</div>
+{{else}}
+
+{{with .Data.Status.JustUpgrade}}
+<div class="msg ok">
+  刚刚完成升级：<code>{{.From}}</code> → <code>{{.To}}</code>，当前运行的就是新版本。
+</div>
+{{end}}
+
+{{if .Data.AutoDisabled}}
+<div class="card" style="border-color:#f0d48a;background:#fffcf2">
+  <h2>当前是自己编译的版本</h2>
+  <p class="sub" style="margin:0">
+    版本号是 <code>{{.Data.Version}}</code>，不是发布号（形如 <code>v1.2.3</code>），
+    和发布号之间没有大小关系，因此<strong>定时升级不会生效</strong>——
+    否则每天都会重新下载一次。
+    手动点「立即升级」仍然可用：升级一次之后就变成正式版本号，定时升级随之正常。
+  </p>
+</div>
+{{end}}
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:12px">
+    <h2 style="margin:0">版本</h2>
+    <form method="post" action="/upgrade/check" style="margin:0">
+      <button class="btn" {{if .Data.Status.Running}}disabled{{end}}>检查更新</button>
+    </form>
+  </div>
+
+  <div class="tw">
+  <table>
+    <tbody>
+      <tr><th style="width:160px">当前版本</th><td class="mono">{{.Data.Status.Current}}</td></tr>
+      <tr><th>运行平台</th><td class="mono">{{.Data.Status.Platform}}（{{.Data.Status.AssetName}}）</td></tr>
+      <tr><th>可执行文件</th><td class="mono">{{.Data.Status.SelfPath}}</td></tr>
+      <tr>
+        <th>最新版本</th>
+        <td>
+          {{if .Data.Status.Latest}}
+            <span class="mono">{{.Data.Status.Latest.Tag}}</span>
+            {{if .Data.Status.HasUpdate}}<span class="pill ok">有新版本</span>
+            {{else}}<span class="pill mute">已是最新</span>{{end}}
+            {{if .Data.Status.Latest.PageURL}}
+              <a href="{{.Data.Status.Latest.PageURL}}" target="_blank" rel="noopener noreferrer" style="margin-left:8px;font-size:13px">发布页</a>
+            {{end}}
+          {{else}}
+            <span class="sub" style="margin:0">还没检查过</span>
+          {{end}}
+        </td>
+      </tr>
+      <tr>
+        <th>上次检查</th>
+        <td>
+          {{if .Data.Status.LastCheck}}{{ts .Data.Status.LastCheck}}{{else}}-{{end}}
+          {{if .Data.Status.LastMessage}}
+            <span class="pill {{if eq .Data.Status.LastResult "error"}}warn{{else}}mute{{end}}" style="margin-left:8px">{{.Data.Status.LastMessage}}</span>
+          {{end}}
+        </td>
+      </tr>
+      {{if .Data.Status.LastRun}}
+      <tr><th>上次升级动作</th><td>{{ts .Data.Status.LastRun}}</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  </div>
+
+  {{if .Data.Status.Latest}}
+    {{if .Data.Status.HasUpdate}}
+    <div class="danger-zone">
+      <p class="sub" style="margin:0 0 10px">
+        将升级到 <code>{{.Data.Status.Latest.Tag}}</code>
+        {{if .Data.Status.Latest.PublishedAt}}（发布于 {{.Data.Status.Latest.PublishedAt.Format "2006-01-02"}}）{{end}}。
+        旧版本会备份成 <code>{{.Data.Status.SelfPath}}.bak</code>，需要时可以回滚。
+      </p>
+      <form method="post" action="/upgrade/apply" style="margin:0">
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 12px">
+          <input type="checkbox" name="confirm" value="1" required style="width:auto;margin-top:3px">
+          <span style="color:var(--text);font-size:13px">我知道升级会重启服务，正在处理的回复可能被打断。</span>
+        </label>
+        <button class="btn primary" {{if .Data.Status.Running}}disabled{{end}}>立即升级</button>
+      </form>
+    </div>
+    {{else}}
+    <div class="danger-zone">
+      <form method="post" action="/upgrade/rollback" style="margin:0">
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 12px">
+          <input type="checkbox" name="confirm" value="1" required style="width:auto;margin-top:3px">
+          <span style="color:var(--text);font-size:13px">用上次升级前的备份覆盖当前二进制（重启后生效）。</span>
+        </label>
+        <button class="btn danger">回滚到上一个版本</button>
+      </form>
+    </div>
+    {{end}}
+  {{end}}
+
+  {{if .Data.Status.LastError}}
+  <div class="msg err" style="margin:14px 0 0">上次失败原因：{{.Data.Status.LastError}}</div>
+  {{end}}
+</div>
+
+{{with .Data.Status.Latest}}
+  {{if .Notes}}
+<div class="card">
+  <h2>更新说明 · {{.Tag}}</h2>
+  <details class="fold">
+    <summary>展开全文<span class="fold-act"></span></summary>
+    <pre class="copybox" style="white-space:pre-wrap;min-height:0;margin:0">{{.Notes}}</pre>
+  </details>
+</div>
+  {{end}}
+{{end}}
+
+<div class="card">
+  <h2>定时升级</h2>
+  <p class="sub" style="margin:0 0 4px">
+    到点自动检查并升级，然后原地重启。默认关闭——自动换掉正在跑的程序这件事，
+    应该由你决定什么时候开始。
+  </p>
+
+  <form method="post" action="/upgrade/config">
+    <label>升级通道</label>
+    <select name="channel">
+      <option value="release" {{if eq .Data.Status.Config.Channel "release"}}selected{{end}}>release（正式版）</option>
+      <option value="prerelease" {{if eq .Data.Status.Config.Channel "prerelease"}}selected{{end}}>prerelease（含预发布版）</option>
+    </select>
+    <p class="sub" style="margin:6px 0 0">预发布版可能有问题，只在你想帮忙试新功能时选。</p>
+
+    <label style="display:flex;gap:8px;align-items:center;margin-top:16px">
+      <input type="checkbox" name="auto" value="1" {{if .Data.Status.Config.Auto}}checked{{end}} style="width:auto">
+      <span style="color:var(--text);font-size:14px">启用定时升级</span>
+    </label>
+
+    <label>每天几点</label>
+    <input type="text" name="at" value="{{.Data.Status.Config.At}}" placeholder="04:00" pattern="[0-2][0-9]:[0-5][0-9]" style="max-width:140px">
+    <p class="sub" style="margin:6px 0 0">24 小时制 HH:MM。建议挑凌晨低峰，重启会打断正在处理的回复。</p>
+
+    <label style="display:flex;gap:8px;align-items:center;margin-top:16px">
+      <input type="checkbox" name="startup_check" value="1" {{if .Data.Status.Config.StartupCheck}}checked{{end}} style="width:auto">
+      <span style="color:var(--text);font-size:14px">启动时检查一次更新（只检查，不自动升级）</span>
+    </label>
+
+    <div class="row" style="margin-top:18px">
+      <button class="btn primary">保存</button>
+    </div>
+  </form>
+</div>
+{{end}}
+{{template "foot" .}}

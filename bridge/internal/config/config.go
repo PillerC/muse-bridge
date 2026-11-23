@@ -45,6 +45,17 @@ type Config struct {
 	TGProxy string
 	// Typing 控制认领后是否在 Telegram 显示"输入中"。默认开。
 	Typing bool
+	// UpgradeRepo 是在线升级使用的 GitHub 仓库，形如 goojia/muse-bridge。
+	UpgradeRepo string
+	// UpgradeAPI 是 GitHub API 基址，企业版或镜像可改。
+	UpgradeAPI string
+	// UpgradeDisabled 为 true 时彻底关掉在线升级（连页面都不给入口）。
+	// 用于"二进制由我自己统一发，不想让任何人从后台换掉它"的部署。
+	UpgradeDisabled bool
+	// BackupDisabled 为 true 时彻底关掉归档与在线备份。
+	BackupDisabled bool
+	// ArchiveDir 是每日归档文件的存放目录。默认放在 DataDir 下的 archive/。
+	ArchiveDir string
 }
 
 // DBPath 返回 SQLite 文件路径。
@@ -66,21 +77,26 @@ func (c *Config) Host() string {
 func Load() (*Config, error) {
 	dataDir := env("BRIDGE_DATA_DIR", "/data")
 	c := &Config{
-		Addr:          env("BRIDGE_ADDR", "127.0.0.1:8080"),
-		PublicAddr:    env("BRIDGE_PUBLIC_ADDR", "0.0.0.0:443"),
-		PublicURL:     strings.TrimRight(env("BRIDGE_PUBLIC_URL", ""), "/"),
-		ACMEEmail:     env("BRIDGE_ACME_EMAIL", ""),
-		TLSCert:       env("BRIDGE_TLS_CERT", ""),
-		TLSKey:        env("BRIDGE_TLS_KEY", ""),
-		DataDir:       dataDir,
-		AdminUser:     env("BRIDGE_ADMIN_USER", "admin"),
-		AdminPassword: os.Getenv("BRIDGE_ADMIN_PASSWORD"),
-		AdminReset:    os.Getenv("BRIDGE_ADMIN_RESET") == "1",
-		DefaultMode:   env("BRIDGE_MODE", "webhook"),
-		LeaseSeconds:  180,
-		MaxAttempts:   5,
-		TGProxy:       env("BRIDGE_TG_PROXY", ""),
-		Typing:        env("BRIDGE_TYPING", "1") != "0",
+		Addr:            env("BRIDGE_ADDR", "127.0.0.1:8080"),
+		PublicAddr:      env("BRIDGE_PUBLIC_ADDR", "0.0.0.0:443"),
+		PublicURL:       strings.TrimRight(env("BRIDGE_PUBLIC_URL", ""), "/"),
+		ACMEEmail:       env("BRIDGE_ACME_EMAIL", ""),
+		TLSCert:         env("BRIDGE_TLS_CERT", ""),
+		TLSKey:          env("BRIDGE_TLS_KEY", ""),
+		DataDir:         dataDir,
+		AdminUser:       env("BRIDGE_ADMIN_USER", "admin"),
+		AdminPassword:   os.Getenv("BRIDGE_ADMIN_PASSWORD"),
+		AdminReset:      os.Getenv("BRIDGE_ADMIN_RESET") == "1",
+		DefaultMode:     env("BRIDGE_MODE", "webhook"),
+		LeaseSeconds:    180,
+		MaxAttempts:     5,
+		TGProxy:         env("BRIDGE_TG_PROXY", ""),
+		Typing:          env("BRIDGE_TYPING", "1") != "0",
+		UpgradeRepo:     env("BRIDGE_UPGRADE_REPO", "goojia/muse-bridge"),
+		UpgradeAPI:      env("BRIDGE_UPGRADE_API", "https://api.github.com"),
+		UpgradeDisabled: env("BRIDGE_UPGRADE_DISABLED", "") == "1",
+		BackupDisabled:  env("BRIDGE_BACKUP_DISABLED", "") == "1",
+		ArchiveDir:      env("BRIDGE_ARCHIVE_DIR", filepath.Join(dataDir, "archive")),
 	}
 
 	secretRaw := os.Getenv("BRIDGE_SECRET")

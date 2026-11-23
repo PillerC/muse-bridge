@@ -1,0 +1,65 @@
+name: release
+
+# 打 tag 时自动交叉编译各平台二进制，连同 checksums.txt 一起发到 Release。
+#
+# 为什么必须有这个流水线：程序的在线升级是去 GitHub Releases 下载
+# bridge-<os>-<arch> 的，仓库里没有预编译产物就没得升。
+# 资产名必须与 internal/upgrade.AssetName 拼出来的一致。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # 手动跑一次（不发 Release，只验证构建能过）。
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git describe 需要完整的 tag 和提交历史，否则版本号会退化成哈希。
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+
+      - name: 单元测试
+        working-directory: bridge
+        run: go test ./...
+
+      - name: 交叉编译
+        working-directory: bridge
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          COMMIT: ${{ github.sha }}
+          ALL: '1'
+        run: |
+          # workflow_dispatch 时没有 tag，用 git describe 兜底。
+          if [ -z "${VERSION}" ]; then unset VERSION; fi
+          bash scripts/build.sh
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-dist
+          path: |
+            bridge/dist/bridge-*
+            bridge/dist/checksums.txt
+
+      - name: 发布 Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bridge/dist/bridge-*
+            bridge/dist/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}

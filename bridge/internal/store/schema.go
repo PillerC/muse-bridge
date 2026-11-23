@@ -122,4 +122,27 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(expires_at);
+
+-- 每日归档状态。一天一行，记录"归档了吗、上传了吗、本地删了吗"。
+-- 文件系统里的文件不可信（可能被手动删、可能上传失败），
+-- 所以状态以这张表为准，它决定了哪天可以安全删除本地数据。
+CREATE TABLE IF NOT EXISTS archive_state (
+  day          TEXT PRIMARY KEY,
+  records      INTEGER NOT NULL DEFAULT 0,
+  bytes        INTEGER NOT NULL DEFAULT 0,
+  archived_at  INTEGER NOT NULL DEFAULT 0,
+  uploaded_at  INTEGER NOT NULL DEFAULT 0,
+  upload_error TEXT    NOT NULL DEFAULT '',
+  purged_at    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_archive_upload ON archive_state(uploaded_at, day);
+
+-- 键值配置表：升级设置这类"全实例只有一份"的状态放这里，
+-- 不必为一个开关加一列、也不必动 bridges 这种核心表。
+-- 值一律存字符串，由调用方自己解析，升级配置只是其中一类。
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
 `

@@ -1,0 +1,158 @@
+{{template "head" .}}
+<h1>备份与归档</h1>
+<p class="sub">
+  聊天记录按天切成独立文件，可以自动上传到 S3 兼容存储或 WebDAV 网盘，
+  本地只保留最近若干天。上传成功之后才会删除本地数据。
+</p>
+
+{{if .Data.Disabled}}
+<div class="card">
+  <h2>已关闭</h2>
+  <p class="sub" style="margin:0">
+    这个实例设置了 <code>BRIDGE_BACKUP_DISABLED=1</code>，不提供归档与在线备份。
+  </p>
+</div>
+{{else}}
+{{with .Data.Status}}
+
+<div class="grid stats" style="margin-bottom:18px">
+  <div class="stat"><b>{{.LocalCount}}</b><span>归档文件</span></div>
+  <div class="stat"><b>{{.LocalBytes}}</b><span>本地归档字节</span></div>
+  <div class="stat"><b>{{.KeepDays}}</b><span>本地保留天数（0=不清理）</span></div>
+  <div class="stat"><b>{{if eq .LastResult "error"}}失败{{else if eq .LastResult "ok"}}正常{{else}}未运行{{end}}</b><span>上次执行</span></div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:12px">
+    <h2 style="margin:0">执行</h2>
+    <form method="post" action="/backup/run" style="margin:0">
+      <button class="btn primary" {{if .Running}}disabled{{end}}>立即归档并上传</button>
+    </form>
+  </div>
+  <p class="sub" style="margin:0 0 8px">
+    会把还没归档的日子生成归档文件，上传所有待上传的归档，然后按保留策略清理本地记录。
+    每天也会自动执行一次。
+  </p>
+  {{if .LastRun}}
+  <p class="sub" style="margin:0">
+    上次执行：{{ts .LastRun}}
+    {{if .LastMessage}}· <span class="{{if eq .LastResult "error"}}mono{{end}}" style="{{if eq .LastResult "error"}}color:var(--err){{end}}">{{.LastMessage}}</span>{{end}}
+  </p>
+  {{end}}
+  <p class="sub" style="margin:6px 0 0">归档目录：<code>{{.Dir}}</code></p>
+</div>
+
+<div class="card">
+  <h2>每日归档</h2>
+  <p class="sub" style="margin:0 0 12px">
+    一天一个 <code>YYYY-MM-DD.jsonl.gz</code>，JSON Lines 加 gzip，流式可读。
+    归档不会删数据；删不删本地记录由下面的保留策略决定。
+  </p>
+  {{if .Days}}
+  <div class="tw">
+  <table>
+    <thead><tr><th>日期</th><th>条数</th><th>大小</th><th>归档</th><th>上传</th><th>本地</th><th></th></tr></thead>
+    <tbody>
+    {{range .Days}}
+      <tr>
+        <td class="mono">{{.Day}}</td>
+        <td>{{.Records}}</td>
+        <td>{{.Bytes}}</td>
+        <td>{{if .ArchivedAt}}<span class="pill ok">已归档</span>{{else if .HasMessages}}<span class="pill warn">待归档</span>{{else}}<span class="pill mute">无消息</span>{{end}}</td>
+        <td>
+          {{if .UploadedAt}}<span class="pill ok">已上传</span>
+          {{else if .UploadError}}<span class="pill warn" title="{{.UploadError}}">失败</span>
+          {{else}}<span class="pill mute">未上传</span>{{end}}
+        </td>
+        <td>{{if .PurgedAt}}<span class="pill mute">已清理</span>{{else if .HasMessages}}<span class="pill ok">在库</span>{{else}}-{{end}}</td>
+        <td>
+          {{if and .FileExists (not .UploadedAt)}}
+          <form method="post" action="/backup/upload/{{.Day}}" style="margin:0">
+            <button class="btn">上传</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <div class="empty">还没有归档。点上面的「立即归档并上传」，或者等每日自动任务。</div>
+  {{end}}
+</div>
+
+<form class="card" method="post" action="/backup/save">
+  <h2>备份目标</h2>
+  <p class="sub" style="margin:0 0 4px">选一个目标填。凭据留空表示不修改已保存的值。</p>
+
+  <label>类型</label>
+  <select name="type">
+    <option value="" {{if eq .Config.Type ""}}selected{{end}}>不备份</option>
+    <option value="s3" {{if eq .Config.Type "s3"}}selected{{end}}>S3 兼容对象存储</option>
+    <option value="webdav" {{if eq .Config.Type "webdav"}}selected{{end}}>WebDAV 网盘</option>
+  </select>
+
+  <label>对象键前缀（可选）</label>
+  <input type="text" name="prefix" value="{{.Config.Prefix}}" placeholder="muse-bridge/my-server">
+
+  <details class="fold" style="margin-top:16px">
+    <summary>S3 兼容存储（AWS S3 / MinIO / R2 / OSS / COS）<span class="fold-act"></span></summary>
+    <label>Endpoint</label>
+    <input type="text" name="s3_endpoint" value="{{.Config.S3.Endpoint}}" placeholder="https://s3.us-east-1.amazonaws.com">
+    <label>Region（可留空，默认 us-east-1）</label>
+    <input type="text" name="s3_region" value="{{.Config.S3.Region}}" placeholder="us-east-1">
+    <label>Bucket</label>
+    <input type="text" name="s3_bucket" value="{{.Config.S3.Bucket}}" placeholder="my-backup-bucket">
+    <label style="display:flex;gap:8px;align-items:center">
+      <input type="checkbox" name="s3_path_style" value="1" {{if .Config.S3.PathStyle}}checked{{end}} style="width:auto">
+      <span style="color:var(--text);font-size:14px">用 path-style 寻址（MinIO 等自建服务通常要勾）</span>
+    </label>
+    <label>Access Key</label>
+    <input type="text" name="s3_access_key" value="{{.Config.S3.AccessKey}}" autocomplete="off">
+    <label>Secret Key{{if $.Data.SecretSet}}（已设置，留空不改）{{end}}</label>
+    <input type="password" name="s3_secret_key" value="" placeholder="{{if $.Data.SecretSet}}••••••••（留空表示不修改）{{end}}" autocomplete="new-password">
+    <label>Session Token（可选）</label>
+    <input type="password" name="s3_session_token" value="" autocomplete="new-password">
+  </details>
+
+  <details class="fold" style="margin-top:12px">
+    <summary>WebDAV 网盘（Nextcloud / 坚果云 / 群晖）<span class="fold-act"></span></summary>
+    <label>目录地址</label>
+    <input type="text" name="webdav_url" value="{{.Config.WebDAV.URL}}" placeholder="https://dav.example.com/remote.php/dav/files/user/bridge/">
+    <label>用户名</label>
+    <input type="text" name="webdav_user" value="{{.Config.WebDAV.Username}}" autocomplete="off">
+    <label>密码{{if $.Data.PassSet}}（已设置，留空不改）{{end}}</label>
+    <input type="password" name="webdav_password" value="" placeholder="{{if $.Data.PassSet}}••••••••（留空表示不修改）{{end}}" autocomplete="new-password">
+    <p class="sub" style="margin:8px 0 0">目录必须已存在。上传的文件会放在这个目录下。</p>
+  </details>
+
+  <label style="display:flex;gap:8px;align-items:center;margin-top:18px">
+    <input type="checkbox" name="enabled" value="1" {{if .Config.Enabled}}checked{{end}} style="width:auto">
+    <span style="color:var(--text);font-size:14px">启用在线备份（每日自动上传）</span>
+  </label>
+
+  <div class="danger-zone">
+    <h2>本地保留</h2>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:0">
+      <input type="checkbox" name="retain" value="1" {{if .Config.Retain}}checked{{end}} style="width:auto">
+      <span style="color:var(--text);font-size:14px">自动清理本地聊天记录</span>
+    </label>
+    <label>保留天数</label>
+    <input type="text" name="keep_days" value="{{.Config.KeepDays}}" placeholder="30" style="max-width:140px">
+    <p class="sub" style="margin:6px 0 0">
+      只保留最近这么多天的本地消息，更早的会删掉。0 表示永不清理。
+      <strong>只有当天已成功上传到远端才会删</strong>——上传失败的日子一律保留。
+      必须启用在线备份才能开这个开关。
+    </p>
+  </div>
+
+  <div class="row" style="margin-top:20px">
+    <button class="btn primary">保存</button>
+    <button class="btn" name="action" value="test" formaction="/backup/test">测试连接</button>
+  </div>
+</form>
+
+{{end}}
+{{end}}
+{{template "foot" .}}

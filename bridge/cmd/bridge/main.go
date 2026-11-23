@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"golang.org/x/crypto/acme/autocert"
 
+	"muse-bridge/internal/backup"
 	"muse-bridge/internal/config"
 	"muse-bridge/internal/domain"
 	"muse-bridge/internal/poller"
@@ -22,15 +24,31 @@ import (
 	"muse-bridge/internal/server"
 	"muse-bridge/internal/store"
 	"muse-bridge/internal/tg"
+	"muse-bridge/internal/upgrade"
+	"muse-bridge/internal/version"
 )
 
-// version 由 -ldflags 注入。
-var version = "dev"
+// buildVersion 是启动日志里显示的版本号，来源是 internal/version。
+var buildVersion = version.Version
 
 func main() {
+	// --version / version 子命令：安装脚本和运维要用它判断当前版本，
+	// 不必去翻日志或者解析二进制。必须在加载配置之前处理，
+	// 否则只想看版本的用户会先被"BRIDGE_SECRET 未设置"挡住。
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-version", "version":
+			fmt.Printf("muse-bridge %s\n", buildVersion)
+			if version.Commit != "" {
+				fmt.Printf("commit %s\n", version.Commit)
+			}
+			return
+		}
+	}
+
 	log.SetFlags(log.LstdFlags)
 	log.SetPrefix("[bridge] ")
-	log.Printf("Muse Bridge %s 启动", version)
+	log.Printf("Muse Bridge %s 启动", buildVersion)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -59,7 +77,33 @@ func main() {
 	queue := domain.NewQueue(st, cfg.LeaseSeconds, cfg.MaxAttempts)
 	svc := domain.NewService(st, queue, box, factory, cfg.PublicURL)
 	svc.Typing.Enabled = cfg.Typing
+
+	// 在线升级：查 GitHub Releases、下载、校验、原地替换后 exec 重启。
+	// BRIDGE_UPGRADE_DISABLED=1 时整块不启用（页面也不给入口）。
+	var up *upgrade.Service
+	if !cfg.UpgradeDisabled {
+		up = upgrade.NewService(st, upgrade.Options{
+			Repo:    cfg.UpgradeRepo,
+			APIBase: cfg.UpgradeAPI,
+			Current: version.Version,
+			Commit:  version.Commit,
+		})
+		// 重启前停掉"输入中"保活，否则 exec 之后 Telegram 那边还在转圈。
+		up.SetBeforeRestart(svc.Typing.StopAll)
+		// 启动时先确认上一次升级有没有真的生效。
+		up.ConfirmStartup(context.Background())
+	}
+
+	// 归档与在线备份：每天把聊天记录切成独立文件，可上传到 S3/WebDAV，
+	// 并按保留天数清理本地。BRIDGE_BACKUP_DISABLED=1 时整块不启用。
+	var bk *backup.Service
+	if !cfg.BackupDisabled {
+		bk = backup.NewService(st, st, box, st.DB(), cfg.ArchiveDir, time.Local)
+	}
+
 	srv := server.New(cfg, svc, st)
+	srv.SetUpgrader(up)
+	srv.SetBackup(bk)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -84,6 +128,13 @@ func main() {
 	}()
 
 	go poller.New(st, svc).Run(ctx)
+
+	if up != nil {
+		go up.Run(ctx)
+	}
+	if bk != nil {
+		go backup.RunDaily(ctx, bk)
+	}
 
 	adminSrv := &http.Server{
 		Addr:              cfg.Addr,

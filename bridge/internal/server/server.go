@@ -15,10 +15,12 @@ import (
 	"net/http"
 	"strings"
 
+	"muse-bridge/internal/backup"
 	"muse-bridge/internal/config"
 	"muse-bridge/internal/domain"
 	"muse-bridge/internal/secret"
 	"muse-bridge/internal/store"
+	"muse-bridge/internal/upgrade"
 )
 
 // Server 持有依赖并构造路由。
@@ -26,12 +28,28 @@ type Server struct {
 	cfg *config.Config
 	svc *domain.Service
 	st  *store.Store
+	// up 为 nil 表示在线升级被禁用（BRIDGE_UPGRADE_DISABLED=1）。
+	up *upgrade.Service
+	// bk 为 nil 表示在线备份被禁用（BRIDGE_BACKUP_DISABLED=1）。
+	bk *backup.Service
 }
 
 // New 构造 Server。
 func New(cfg *config.Config, svc *domain.Service, st *store.Store) *Server {
 	return &Server{cfg: cfg, svc: svc, st: st}
 }
+
+// SetUpgrader 挂上在线升级服务。传 nil 表示该实例不支持在线升级。
+func (s *Server) SetUpgrader(up *upgrade.Service) { s.up = up }
+
+// Upgrader 返回升级服务，nil 表示该实例不支持在线升级。
+func (s *Server) Upgrader() *upgrade.Service { return s.up }
+
+// SetBackup 挂上归档与备份服务。传 nil 表示该实例不提供在线备份。
+func (s *Server) SetBackup(bk *backup.Service) { s.bk = bk }
+
+// Backuper 返回备份服务，nil 表示该实例不支持在线备份。
+func (s *Server) Backuper() *backup.Service { return s.bk }
 
 type ctxKey string
 

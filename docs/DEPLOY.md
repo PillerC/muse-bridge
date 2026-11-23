@@ -2,6 +2,33 @@
 
 面向已经跑起来的部署。首次部署看 README 的「快速开始」。
 
+## 安装
+
+三种方式，任选其一：
+
+```bash
+# 1. 一键安装（推荐）：下载预编译二进制 + 校验 + 装服务
+curl -fsSL https://raw.githubusercontent.com/goojia/muse-bridge/main/install.sh \
+  | sudo sh -s -- --domain bridge.example.com --email you@example.com
+
+# 2. 从源码编译安装
+git clone https://github.com/goojia/muse-bridge.git && cd muse-bridge
+sudo sh install.sh --from-source --domain bridge.example.com
+
+# 3. 手动：编译后按下面的「目录与文件」自己放
+cd bridge && GOOS=linux GOARCH=amd64 bash scripts/build.sh
+```
+
+一键安装默认装到 `/opt/muse-bridge`，用 `--prefix` 可以改。
+它幂等：重复执行不会覆盖配置、不会重新生成主密钥。
+
+卸载：
+
+```bash
+sudo sh install.sh --uninstall           # 保留数据和配置
+sudo sh install.sh --uninstall --purge   # 连数据一起删
+```
+
 ## 目录与文件
 
 | 路径 | 内容 |
@@ -101,6 +128,34 @@ https://bridge.example.com/
 
 ## 升级
 
+两条路，日常用第一条。
+
+### 后台一键升级（推荐）
+
+登录后台 →「升级」→「检查更新」→ 勾选确认 →「立即升级」。
+
+程序自己完成：查 GitHub Releases → 下载当前平台的 `bridge-<os>-<arch>` →
+用 `checksums.txt` 校验 sha256 → 备份旧文件为 `bridge.bak` → rename 原子替换 →
+`syscall.Exec` 换成新二进制。**PID 不变**，systemd / OpenRC / nohup 起的都不用改配置。
+
+也可以在同一个页面打开「定时升级」，设成每天凌晨自动升级。
+
+几点运维须知：
+
+- 升级会重启进程，正在处理的回复会被打断（消息不会丢，租约过期后自动回到队列）。
+- 失败不动旧版本：下载、校验、替换任何一步出错都继续跑旧版本，页面显示原因。
+- 升级后如果日志里出现「上次升级未生效」，说明 exec 后版本没变，
+  可以点页面上的「回滚到上一个版本」用 `bridge.bak` 恢复。
+- 二进制目录必须对服务账号可写（`/data/bridge`、`/opt/muse-bridge` 通常没问题；
+  装在 `/usr/local/bin` 且用非 root 跑的话会报「目录不可写」）。
+- 想彻底关掉：env 里加 `BRIDGE_UPGRADE_DISABLED=1`，后台连入口都不显示。
+- 仓库还没发过 Release（或当前平台没出包）时，检查会提示"没有找到适合当前平台的发布"。
+
+发版由 `.github/workflows/release.yml` 负责：`git tag v1.2.3 && git push origin v1.2.3`，
+Actions 跑完测试后交叉编译四个平台并连同 `checksums.txt` 发到 Release。
+
+### 手动替换
+
 ```bash
 # 本地
 cd bridge && GOOS=linux GOARCH=amd64 bash scripts/build.sh
@@ -113,7 +168,69 @@ chmod +x /data/bridge/bridge && rc-service muse-bridge restart
 数据库迁移是自动的：启动时执行 `CREATE TABLE IF NOT EXISTS` 和缺失列的补齐。
 升级前建议先备份（见下）。
 
-## 备份
+### 回滚
+
+后台升级过的，`bridge.bak` 就是上一个版本：
+
+```bash
+# 方式一：后台「升级」页点「回滚到上一个版本」，然后重启服务
+# 方式二：手动
+mv /data/bridge/bridge.bak /data/bridge/bridge && rc-service muse-bridge restart
+```
+
+## 归档与在线备份
+
+后台「备份」页可以做三件事：按天归档、上传到 S3/WebDAV、按保留天数清理本地。
+
+### 归档文件
+
+每天一个 `YYYY-MM-DD.jsonl.gz`，放在 `BRIDGE_ARCHIVE_DIR`（默认 `<数据目录>/archive`）。
+JSON Lines 加 gzip，可以直接看：
+
+```bash
+gzip -dc /data/bridge-data/archive/2026-11-22.jsonl.gz | head -3
+gzip -dc /data/bridge-data/archive/2026-11-22.jsonl.gz | jq -r '.text' | head
+```
+
+归档只是生成文件，**不会删数据库里的消息**。删不删本地由保留策略决定。
+
+### 配置备份目标
+
+S3 兼容存储填 Endpoint / Region / Bucket / Access Key / Secret Key；
+MinIO 这类自建服务通常还要勾 path-style。WebDAV 填目录地址和账号密码，
+目录必须先在网盘里建好（程序不会替你在别人网盘里建目录）。
+
+凭据用 `BRIDGE_SECRET` 加密后存库，界面不回显；表单里留空表示不修改。
+
+### 保留天数与自动清理
+
+勾上「自动清理本地聊天记录」并填天数，更早的消息会被删除。
+
+**只有当天已成功上传到远端才会删。** 上传失败的日子一律保留，
+这是硬性保护——否则一次网络抖动就是永久丢数据。
+也因此：没启用在线备份时，程序不允许开自动清理。
+
+清理只删 `messages` 和 `jobs`，不删 `conversations`：
+会话本身是轻量元信息，删了会让后台会话列表整段消失，
+用户会以为"聊天记录凭空没了"。
+
+想彻底关掉归档和备份：env 里加 `BRIDGE_BACKUP_DISABLED=1`。
+
+### 恢复
+
+归档文件是纯文本流，恢复不依赖程序：
+
+```bash
+gzip -dc 2026-11-22.jsonl.gz | jq -r '[.time, .direction, .bridge, .sender, .text] | @tsv'
+```
+
+需要重新入库时，按 `.time` 换回 unix 秒写进 `messages` 表即可
+（注意 `bridge_id` / `conversation_id` 要对应上）。
+
+## 数据库备份
+
+按天归档只覆盖聊天记录，**桥配置、令牌、账号不在归档里**。
+整机迁移或灾备仍需要备份数据库本身。
 
 数据库是单文件，WAL 模式下直接拷 `.db` 可能拿到不一致的快照，用 SQLite 的备份语法：
 
