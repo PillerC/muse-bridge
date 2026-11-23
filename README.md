@@ -211,6 +211,29 @@ Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 
 后台「升级」页可以把正在跑的程序换成 GitHub Releases 里的新版本，不用登服务器。
 
+### 修改功能的推荐流程
+
+服务器上跑的是**发布版二进制**，不在服务器上编译。改功能的流程是：
+
+```bash
+# 1. 本地改代码、跑测试
+cd bridge && go test ./...
+
+# 2. 提交并推送
+git add -A && git commit -m "feat: ..."
+git push origin main
+
+# 3. 打 tag 触发发布（GitHub Actions 自动编译四平台 + 发 Release）
+git tag v1.3.1 && git push origin v1.3.1
+
+# 4. 等 Actions 跑完，在服务器后台「升级」页点「立即升级」
+#    或者打开定时升级，让它自己换
+```
+
+服务器不需要 Go 工具链，也不需要 git——只下载一个 14MB 的二进制并校验替换。
+这样「本地开发 → 发布 → 服务器升级」三件事彻底解耦，服务器上永远跑的是
+和 Release 完全一致的东西。
+
 ```text
 后台「升级」→ 检查更新 → 立即升级
                 │

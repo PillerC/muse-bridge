@@ -126,6 +126,20 @@ https://bridge.example.com/
 **忘记密码**：在 env 里写上 `BRIDGE_ADMIN_USER` / `BRIDGE_ADMIN_PASSWORD`，再加一行 `BRIDGE_ADMIN_RESET=1`，重启；
 启动日志会说明这次是用 env 覆盖。登进去后把 `BRIDGE_ADMIN_RESET` 删掉，否则每次重启都会重置。
 
+## 服务器部署约定
+
+生产服务器（`bridge.cjjia.com`）跑的是**发布版二进制**，装在一键安装脚本的默认位置：
+
+| 路径 | 内容 |
+|---|---|
+| `/opt/muse-bridge/bridge` | 二进制（来自 GitHub Releases，不在服务器上编译） |
+| `/opt/muse-bridge/bridge-data/` | 数据库、证书、归档 |
+| `/opt/muse-bridge/muse-bridge.env` | 配置（含主密钥） |
+| `/opt/muse-bridge/log/` | 日志 |
+
+**改功能的流程**：本地改 → 推 GitHub → 打 tag 触发 Actions 发版 → 后台「升级」页点一下。
+服务器上不装 Go、不装 git、不编译。详见 README 的「修改功能的推荐流程」。
+
 ## 升级
 
 两条路，日常用第一条。
