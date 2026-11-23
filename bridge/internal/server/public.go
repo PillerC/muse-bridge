@@ -77,13 +77,16 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // handlePendingCount 返回可认领的消息数。
 //
-// 三种调用方式，按优先级：
+// 两种调用方式，按优先级：
 //  1. 带 Bearer 令牌：只算令牌所属的桥；
-//  2. 不带令牌但带 ?bridge=<slug>：只算这一座桥。hook 用这个，
-//     否则任何一座桥有消息，所有装了这个 hook 的 agent 都会被叫醒，
-//     醒来却在自己的队列里什么也领不到（每个 agent 的 poll 有令牌隔离）。
-//     slug 不是凭据——它本来就印在详情页上，只能读到一个数字；
-//  3. 两者都没有：所有 active 桥合计，兼容 v1 的 hook。
+//  2. 不带令牌但带 ?bridge=<slug>：只算这一座桥。hook 用这个。
+//     slug 不是凭据——它本来就印在详情页上，只能读到一个数字。
+//
+// 两者都没有时直接报错，**不再返回所有桥的合计**。
+// 那个兜底曾经让所有 agent 共用同一个"有活"信号：任何一座桥来消息，
+// 所有装了 hook 的 agent 都会被叫醒，醒来 poll 却只领得到自己那座桥的
+// 消息，等于白烧一轮推理。让它明确失败，比给一个会误导人的数字好：
+// hook 配错了会立刻暴露，而不是安静地多跑几千次。
 //
 // 每次先回收过期租约：v1 的死锁就是因为回收只藏在 /poll 里，
 // 而 /poll 只在 pending>0 时才被调用，agent 崩溃后队列永远不清零。
@@ -117,22 +120,12 @@ func (s *Server) handlePendingCount(w http.ResponseWriter, r *http.Request) {
 			n, err = s.svc.Queue.PendingCount(r.Context(), b.ID, now)
 		}
 	default:
-		bridges, lerr := s.st.ListBridges(r.Context())
-		if lerr != nil {
-			writeErr(w, http.StatusInternalServerError, lerr.Error())
-			return
-		}
-		for _, b := range bridges {
-			if b.Status != "active" {
-				continue
-			}
-			c, cerr := s.svc.Queue.PendingCount(r.Context(), b.ID, now)
-			if cerr != nil {
-				err = cerr
-				break
-			}
-			n += c
-		}
+		// 既没令牌也没 slug：明确报错。
+		// 返回 400 而不是 401，是因为这不是鉴权问题——带上 bridge 参数
+		// 就能用，不需要任何凭据。
+		writeErr(w, http.StatusBadRequest,
+			"必须指定桥：加 ?bridge=<桥标识> 参数，或带上 Bearer 令牌")
+		return
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

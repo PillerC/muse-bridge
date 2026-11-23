@@ -177,7 +177,7 @@ Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/pending-count?bridge=<slug>` | 待处理数。**可匿名**，hook 用；带 `bridge` 只统计该桥，带令牌时只统计令牌所属的桥 |
+| GET | `/pending-count?bridge=<slug>` | 待处理数。**可匿名**，hook 用；`bridge` 或令牌必须给一个，两者都没有返回 400 |
 | GET | `/poll?limit=5&lease_seconds=180` | 认领，返回 `messages[]` + `lease_id` |
 | POST | `/ack` | `{ids:[], lease_id}` |
 | POST | `/fail` | `{id, lease_id, error}`，指数退避，超限进死信 |
@@ -187,8 +187,13 @@ Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 
 `/poll` 返回的每条消息都带自己的 `lease_id`，避免两批消息混在一起时 ack 用错租约。
 
-`/pending-count` 不带参数时返回所有 active 桥的合计；hook 必须带 `?bridge=<slug>`，
-否则任何一座桥有消息都会唤醒所有 agent，而它们 `poll` 时只领得到自己那座桥的消息，等于白跑。
+`/pending-count` 必须指明是哪座桥：带 `?bridge=<slug>`（hook 用这个，匿名可调）
+或带 Bearer 令牌。**两者都没有时返回 400**，不会退回到"所有桥合计"。
+
+早期版本在不带参数时返回合计，那是个陷阱：任何一座桥有消息，所有装了 hook 的
+agent 都会被叫醒，醒来 `poll` 却只领得到自己那座桥的消息，等于白烧一轮推理。
+现在让它明确失败，配错 hook 会立刻暴露。
+
 `slug` 只是公开标识（详情页标题旁就印着），只能读到一个数字，不是凭据。
 
 `/reply` 的任务 id 字段是 `id`；`mode` 只能是 `draft` 或 `final`，省略按 `final` 处理

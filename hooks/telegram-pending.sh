@@ -2,11 +2,11 @@
 # 每 5 秒检查桥里是否有待处理消息，有则唤醒 agent 回复。
 # Muse 里的 hook 名建议用 muse-bridge-pending，与桥详情页的接入提示词保持一致。
 #
-# 与 v1 完全一致的机制（经过实测），只是地址换成了自己的桥。
 # 只调用匿名的 /pending-count，只返回一个数字，不携带任何令牌。
 #
-# 一定要带上 bridge=<slug>：不带参数时返回的是所有桥的合计，别的桥有活
-# 也会唤醒你，而你 poll 的时候只领得到自己这座桥的消息，等于白跑一轮。
+# bridge=<slug> 是必填的：服务端不再提供"所有桥合计"这个兜底，
+# 不带参数会返回 400。以前那个兜底会让所有 agent 被同一座桥的消息叫醒，
+# 醒来 poll 却只领得到自己的消息，等于白跑一轮。
 set -euo pipefail
 source "$HATCH_HOOK_RUNTIME"
 
@@ -15,10 +15,14 @@ BRIDGE_SLUG="${MUSE_BRIDGE_SLUG:-}"
 STATE_FILE="$HOME/hooks/state/telegram-pending.json"
 DRY_RUN="${HATCH_HOOK_DRY_RUN:-0}"
 
-count_url="$BRIDGE_URL/pending-count"
-if [ -n "$BRIDGE_SLUG" ]; then
-  count_url="$count_url?bridge=$BRIDGE_SLUG"
+# 没有 slug 就别发请求了：发出去必然 400，不如在本地就报清楚。
+if [ -z "$BRIDGE_SLUG" ]; then
+  log "missing_slug" '{}'
+  silent "MUSE_BRIDGE_SLUG 未设置，无法查询待处理数"
+  exit 0
 fi
+
+count_url="$BRIDGE_URL/pending-count?bridge=$BRIDGE_SLUG"
 
 resp=$(curl --fail --silent --show-error --max-time 10 "$count_url" || true)
 if [ -z "$resp" ]; then

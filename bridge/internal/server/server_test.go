@@ -227,8 +227,8 @@ func TestWebhookToReplyFlow(t *testing.T) {
 		t.Fatalf("入库结果不对: %s", w.Body)
 	}
 
-	// 2. hook 轮询的匿名计数
-	w = f.do(t, "GET", "/pending-count", "", nil)
+	// 2. hook 轮询的匿名计数（必须带桥标识）
+	w = f.do(t, "GET", "/pending-count?bridge=demo", "", nil)
 	if !strings.Contains(w.Body.String(), `"pending":1`) {
 		t.Fatalf("pending-count 应为 1，得到 %s", w.Body)
 	}
@@ -314,8 +314,12 @@ func TestWebhookToReplyFlow(t *testing.T) {
 	}
 }
 
-// 匿名 /pending-count 是所有 active 桥的合计：任何一座桥有活，装了 hook 的
-// agent 全都会醒。带 ?bridge=<slug> 只算这一座，各桥的 hook 才不会互相惊醒。
+// /pending-count 必须按桥隔离：带 ?bridge=<slug> 只算这一座，
+// 各桥的 hook 才不会互相惊醒。
+//
+// 早期版本在不带参数时返回所有桥的合计，那是个陷阱：任何一座桥来消息，
+// 所有 agent 都会被叫醒，醒来 poll 却只领得到自己那座桥的消息。
+// 现在不带参数直接 400，让配置错误立刻暴露。
 func TestPendingCountScopedBySlug(t *testing.T) {
 	f := newFixture(t)
 
@@ -351,7 +355,6 @@ func TestPendingCountScopedBySlug(t *testing.T) {
 		path string
 		want int
 	}{
-		{"/pending-count", 3},
 		{"/pending-count?bridge=demo", 2},
 		{"/pending-count?bridge=other", 1},
 	} {
@@ -370,13 +373,26 @@ func TestPendingCountScopedBySlug(t *testing.T) {
 		}
 	}
 
+	// 不带参数且没令牌：400，不能退回到"所有桥合计"。
+	w := f.do(t, "GET", "/pending-count", "", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("不带 bridge 参数应 400，实际 %d: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "必须指定桥") {
+		t.Fatalf("错误信息应说明必须带参数，实际 %s", w.Body)
+	}
+	// 更不能悄悄返回一个数字——那正是旧行为最危险的地方。
+	if strings.Contains(w.Body.String(), `"pending"`) {
+		t.Fatalf("报错时不应带 pending 数字，实际 %s", w.Body)
+	}
+
 	// slug 写错要 404：hook 守着永远为 0 的数字，比报错更难发现。
 	if w := f.do(t, "GET", "/pending-count?bridge=nope", "", nil); w.Code != 404 {
 		t.Fatalf("未知 slug 应 404，实际 %d", w.Code)
 	}
 
 	// 令牌优先于 slug：带着 demo 的令牌却写了 other 的 slug，仍按令牌算 2。
-	w := f.do(t, "GET", "/pending-count?bridge=other", "", f.auth())
+	w = f.do(t, "GET", "/pending-count?bridge=other", "", f.auth())
 	if !strings.Contains(w.Body.String(), `"pending":2`) {
 		t.Fatalf("令牌应优先于 slug，实际 %s", w.Body)
 	}
@@ -437,7 +453,7 @@ func TestPendingCountReapsExpiredLease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w = f.do(t, "GET", "/pending-count", "", nil)
+	w = f.do(t, "GET", "/pending-count?bridge=demo", "", nil)
 	if !strings.Contains(w.Body.String(), `"pending":1`) {
 		t.Fatalf("过期租约应被回收成可认领，得到 %s", w.Body)
 	}
@@ -712,7 +728,7 @@ func TestLegacyAdminPathGone(t *testing.T) {
 // {$} 只匹配 "/" 本身，是这条测试守住的约束。
 func TestAPIRoutesSurviveAdminAtRoot(t *testing.T) {
 	f := newFixture(t)
-	for _, path := range []string{"/health", "/pending-count"} {
+	for _, path := range []string{"/health", "/pending-count?bridge=demo"} {
 		if w := f.do(t, "GET", path, "", nil); w.Code != 200 {
 			t.Fatalf("%s 应 200，实际 %d: %s", path, w.Code, w.Body)
 		}
@@ -908,7 +924,7 @@ func TestWebhookDropsUnknownSender(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"reason":"user_not_allowed"`) {
 		t.Fatalf("应说明拒绝原因，实际 %s", w.Body)
 	}
-	w = f.do(t, "GET", "/pending-count", "", nil)
+	w = f.do(t, "GET", "/pending-count?bridge=demo", "", nil)
 	if !strings.Contains(w.Body.String(), `"pending":0`) {
 		t.Fatalf("陌生人消息不该排队，实际 %s", w.Body)
 	}

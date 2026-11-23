@@ -277,8 +277,10 @@ curl "https://api.telegram.org/bot<token>/getWebhookInfo"
 
 **消息一直 pending，Muse 收不到**
 
-1. `curl https://<域名>/pending-count` 看数字；
-2. 数字大于 0 但 Muse 不动 → 检查 hook 是否在跑、`MUSE_BRIDGE_URL` 是否写对；
+1. `curl "https://<域名>/pending-count?bridge=<桥标识>"` 看数字
+   （桥标识在后台桥详情页标题旁；不带参数会返回 400，这是故意的）；
+2. 数字大于 0 但 Muse 不动 → 检查 hook 是否在跑、`MUSE_BRIDGE_URL` 和
+   `MUSE_BRIDGE_SLUG` 是否写对（缺 slug 时 hook 会直接跳过，不请求）；
 3. Muse 报 401 → 令牌被轮转或写错，在桥详情点「轮转令牌」把新的发给 Muse；
 4. Muse 报 409 → 租约过期，说明它处理太慢，把 `--lease-seconds` 调大或加 `extend`。
 

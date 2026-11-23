@@ -723,7 +723,7 @@ func onboardPrompt(base, slug string) string {
 - GET /stats → 队列状态（各状态计数和最近的死信）。
 
 Hook：
-- 建一个名为 muse-bridge-pending 的 hook，每 5 秒请求一次 GET {hook}。这个端点是公开的，不用令牌；一定要带 bridge 参数，只查这座桥 —— 不带参数时返回的是所有桥的合计，别的桥有活会把你白白叫醒，而你 poll 不到任何东西；
+- 建一个名为 muse-bridge-pending 的 hook，每 5 秒请求一次 GET {hook}。这个端点是公开的，不用令牌；bridge 参数是**必填**的 —— 不带参数会直接返回 400 错误，不会给你任何数字；
 - pending 为 0 就安静退出，不要产生任何输出；大于 0 就唤醒你，走一遍 poll → reply；
 - 同一批待处理不要反复唤醒自己：上一次唤醒后 90 秒内、且数量没有增加，继续等下一轮；
 - 唤醒只是提示「有活」，具体有哪些消息仍然要靠 poll 认领，不要拿 pending 的数字当消息内容。
