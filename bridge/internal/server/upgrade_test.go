@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -318,3 +319,107 @@ func TestUpgradeStatusDefaults(t *testing.T) {
 }
 
 var _ = time.Now
+
+// 回归：升级成功后必须先把响应写给浏览器，再重启。
+//
+// 之前的 bug 是 Apply 内部直接 exec：exec 替换进程映像，handler 里
+// 写响应的代码永远不执行，浏览器拿到被中断的连接后会自动重发 POST，
+// 新进程看到版本已是最新，于是返回"当前版本已不低于最新版本"——
+// 升级明明成功了，页面上却显示失败。生产上两次升级都复现了。
+func TestUpgradeApplyWritesResponseBeforeRestart(t *testing.T) {
+	newBinary := []byte("#!/bin/sh\necho upgraded\n")
+	f, _ := newUpgradeFixture(t, "v1.0.0", "v1.1.0", newBinary)
+	_ = f.adminForm(t, "/upgrade/check", "")
+
+	up := f.srv.Upgrader()
+	// 记录"重启被调用的那一刻，响应是否已经写好"。
+	var restarted bool
+	up.SetRestartForTest(func() error {
+		restarted = true
+		return nil
+	})
+
+	w := f.adminForm(t, "/upgrade/apply", "confirm=1")
+
+	// 1) 响应必须是正常的 303，不是 500 也不是空响应。
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("升级后应返回 303，得到 %d: %s", w.Code, w.Body)
+	}
+	// 2) 必须有"已升级到"的成功提示，不能是错误。
+	var flash *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "mb_flash" {
+			flash = c
+		}
+	}
+	if flash == nil {
+		t.Fatal("应下发 flash 提示")
+	}
+	raw, _ := url.QueryUnescape(flash.Value)
+	if strings.HasPrefix(raw, "err|") {
+		t.Fatalf("升级成功却下发了错误提示: %s", raw)
+	}
+	if !strings.Contains(raw, "已升级到 v1.1.0") {
+		t.Fatalf("提示应说明升级到了哪个版本，得到 %q", raw)
+	}
+
+	// 3) 重启是异步的（给浏览器留时间收完响应），等一下再看。
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !restarted {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !restarted {
+		t.Fatal("响应写完之后应触发重启")
+	}
+
+	// 4) 二进制确实被换了。
+	got, err := os.ReadFile(up.SelfPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(newBinary) {
+		t.Fatalf("自身文件应被替换，得到 %q", got)
+	}
+}
+
+// 对照：重复提交同一个升级请求时，第二个请求应明确报"已是最新"，
+// 而不是又走一遍下载安装。
+//
+// 这正是旧 bug 下浏览器重发请求会走到的分支——现在它只在真的重复提交时出现，
+// 而且是一个干净的 303 + 错误提示，不会误伤第一次成功的升级。
+func TestUpgradeApplyTwiceSecondIsNoop(t *testing.T) {
+	f, _ := newUpgradeFixture(t, "v1.0.0", "v1.1.0", []byte("new"))
+	up := f.srv.Upgrader()
+	up.SetRestartForTest(func() error { return nil })
+	_ = f.adminForm(t, "/upgrade/check", "")
+
+	if w := f.adminForm(t, "/upgrade/apply", "confirm=1"); w.Code != http.StatusSeeOther {
+		t.Fatalf("第一次升级应 303，得到 %d", w.Code)
+	}
+
+	// 模拟进程已经 exec 成新版本：换一个 Current=v1.1.0 的服务，共用同一个库。
+	up2 := upgrade.NewService(f.st, upgrade.Options{
+		Repo: "test/repo", APIBase: up.APIBase(), Current: "v1.1.0", GOOS: "linux", GOARCH: "amd64",
+	})
+	up2.SetSelfPathForTest(up.SelfPath())
+	up2.SetRestartForTest(func() error { return nil })
+	f.srv.SetUpgrader(up2)
+
+	w := f.adminForm(t, "/upgrade/apply", "confirm=1")
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("重复升级应 303，得到 %d", w.Code)
+	}
+	var flash *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "mb_flash" {
+			flash = c
+		}
+	}
+	if flash == nil {
+		t.Fatal("应下发提示")
+	}
+	raw, _ := url.QueryUnescape(flash.Value)
+	if !strings.Contains(raw, "已不低于最新版本") {
+		t.Fatalf("重复提交应提示已是最新，得到 %q", raw)
+	}
+}

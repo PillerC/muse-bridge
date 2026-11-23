@@ -135,11 +135,22 @@ func TestServiceCheckAndApply(t *testing.T) {
 		t.Fatalf("最新版本应为 v1.1.0，得到 %s", status.Latest.Tag)
 	}
 
-	if err := svc.Apply(ctx); err != nil {
+	tag, err := svc.Apply(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag != "v1.1.0" {
+		t.Fatalf("应返回安装到的版本 v1.1.0，得到 %q", tag)
+	}
+	// Apply 不再负责重启：调用方要在写完自己的响应之后自己调 Restart。
+	if restarted {
+		t.Fatal("Apply 不该自己重启（会让 HTTP 响应发不出去）")
+	}
+	if err := svc.Restart(); err != nil {
 		t.Fatal(err)
 	}
 	if !restarted {
-		t.Fatal("升级成功后应触发重启")
+		t.Fatal("Restart 应触发重启")
 	}
 
 	got, err := os.ReadFile(self)
@@ -161,7 +172,7 @@ func TestServiceApplyRejectsWhenUpToDate(t *testing.T) {
 	svc, _, _ := newUpgradeFixture(t, srv, "v1.0.0")
 	svc.SetRestartForTest(func() error { t.Fatal("不该重启"); return nil })
 
-	err := svc.Apply(context.Background())
+	_, err := svc.Apply(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "已不低于最新版本") {
 		t.Fatalf("同版本时不应升级，得到 %v", err)
 	}
@@ -197,7 +208,7 @@ func TestServiceApplyRejectsBadChecksum(t *testing.T) {
 	svc, st, self := newUpgradeFixture(t, srv, "v1.0.0")
 	svc.SetRestartForTest(func() error { t.Fatal("校验失败不该重启"); return nil })
 
-	err := svc.Apply(context.Background())
+	_, err := svc.Apply(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "校验失败") {
 		t.Fatalf("摘要不符应失败，得到 %v", err)
 	}

@@ -151,6 +151,9 @@ func (s *Service) Current() string { return s.opt.Current }
 // SelfPath 返回当前可执行文件路径。
 func (s *Service) SelfPath() string { return s.self }
 
+// APIBase 返回 GitHub API 基址（测试需要复用同一个假服务）。
+func (s *Service) APIBase() string { return s.opt.APIBase }
+
 // LoadConfig 从库里读配置，缺失的项用默认值。
 func (s *Service) LoadConfig(ctx context.Context) (Config, error) {
 	cfg := DefaultConfig()
@@ -267,19 +270,27 @@ func (s *Service) checkLocked(ctx context.Context, cfg Config) (*Status, error) 
 	return s.statusFrom(ctx, cfg, rel), nil
 }
 
-// Apply 下载并安装最新版本，然后原地 exec 重启。
+// Apply 下载并安装最新版本，返回安装到的版本号。**不负责重启**。
 //
-// 成功时本函数不会返回（进程映像被换掉）。返回错误说明升级没做成，
-// 旧版本仍在运行——这是刻意的：宁可升级失败，也不要让服务停在半路。
-func (s *Service) Apply(ctx context.Context) error {
+// 为什么把重启拆出去：HTTP 处理器在升级成功后必须先把 303 响应写给浏览器，
+// 再 exec。exec 会替换进程映像，handler 剩下的代码永远不执行；如果在写响应
+// 之前 exec，浏览器收不到任何回复，会自动重发 POST 请求，而新进程看到的
+// 版本已经是最新，于是报"当前版本已不低于最新版本"——升级明明成功了，
+// 页面上却显示失败。定时升级没有这个问题（不涉及 HTTP 响应），
+// 所以它自己调 Restart。
+//
+// 返回错误说明升级没做成，旧版本仍在运行——宁可升级失败，
+// 也不要让服务停在半路。
+func (s *Service) Apply(ctx context.Context) (string, error) {
 	if !s.acquire() {
-		return ErrBusy
+		return "", ErrBusy
 	}
-	// 成功路径会 exec，defer 不会执行，所以失败路径手动 release。
+	// 每个失败分支都要手动 release：成功路径虽然不 exec 了，
+	// 但漏掉 release 会让后续升级一直卡在"已有任务在执行"。
 	cfg, err := s.LoadConfig(ctx)
 	if err != nil {
 		s.release()
-		return err
+		return "", err
 	}
 	client := s.client(cfg)
 	rel := s.cachedRelease()
@@ -287,33 +298,33 @@ func (s *Service) Apply(ctx context.Context) error {
 		rel, err = client.Check(ctx)
 		if err != nil {
 			s.release()
-			return err
+			return "", err
 		}
 	}
 	switch {
 	case rel == nil:
 		s.release()
-		return errors.New("没有找到适合当前平台的发布")
+		return "", errors.New("没有找到适合当前平台的发布")
 	case !NeedsUpdate(s.opt.Current, rel.Tag):
 		s.release()
-		return fmt.Errorf("当前版本 %s 已不低于最新版本 %s", s.opt.Current, rel.Tag)
+		return "", fmt.Errorf("当前版本 %s 已不低于最新版本 %s", s.opt.Current, rel.Tag)
 	case s.self == "":
 		s.release()
-		return errors.New("无法定位当前可执行文件，不能自动升级")
+		return "", errors.New("无法定位当前可执行文件，不能自动升级")
 	}
 
 	sums, err := client.FetchChecksums(ctx, rel.ChecksumURL)
 	if err != nil {
 		s.release()
 		s.fail(ctx, err)
-		return err
+		return "", err
 	}
 	want := sums[rel.AssetName]
 	if want == "" {
 		err = fmt.Errorf("checksums.txt 里没有 %s 的摘要", rel.AssetName)
 		s.release()
 		s.fail(ctx, err)
-		return err
+		return "", err
 	}
 
 	// 直接下载到目标目录的临时文件：校验通过后 rename 就能替换，
@@ -323,7 +334,7 @@ func (s *Service) Apply(ctx context.Context) error {
 		s.release()
 		err = fmt.Errorf("%w: %v", ErrNotWritable, err)
 		s.fail(ctx, err)
-		return err
+		return "", err
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -334,17 +345,17 @@ func (s *Service) Apply(ctx context.Context) error {
 	if _, err := client.Download(ctx, rel.AssetURL, tmp); err != nil {
 		s.release()
 		s.fail(ctx, err)
-		return err
+		return "", err
 	}
 	if err := tmp.Sync(); err != nil {
 		s.release()
 		s.fail(ctx, err)
-		return err
+		return "", err
 	}
 	if err := tmp.Close(); err != nil {
 		s.release()
 		s.fail(ctx, err)
-		return err
+		return "", err
 	}
 
 	now := s.now().Unix()
@@ -359,19 +370,27 @@ func (s *Service) Apply(ctx context.Context) error {
 	if installErr != nil {
 		s.release()
 		s.fail(ctx, installErr)
-		return installErr
+		return "", installErr
 	}
 
-	log.Printf("升级包已就位：%s -> %s（旧版本备份在 %s），准备重启", s.opt.Current, rel.Tag, backup)
+	log.Printf("升级包已就位：%s -> %s（旧版本备份在 %s），等待重启", s.opt.Current, rel.Tag, backup)
 	_ = s.st.SetSettings(ctx, map[string]string{
 		KeyLastResult:  ResultOK,
 		KeyLastMessage: "已升级到 " + rel.Tag + "，正在重启",
 	}, now)
 
+	s.release()
+	return rel.Tag, nil
+}
+
+// Restart 执行原地重启：停掉保活，然后 exec 换成新二进制。
+//
+// 成功时不会返回。调用方必须先把自己的收尾工作做完（比如把 HTTP 响应
+// 写给浏览器），否则那些代码永远不会执行。
+func (s *Service) Restart() error {
 	if s.onBeforeRestart != nil {
 		s.onBeforeRestart()
 	}
-	// 这里之后本进程映像会被替换；成功即不再返回。
 	return s.restart()
 }
 
@@ -565,8 +584,15 @@ func (s *Service) Run(ctx context.Context) {
 				log.Printf("定时升级：检查失败: %v", err)
 				continue
 			}
-			if err := s.Apply(ctx); err != nil {
+			tag, err := s.Apply(ctx)
+			if err != nil {
 				log.Printf("定时升级：升级失败: %v", err)
+				continue
+			}
+			// 定时升级没有 HTTP 响应要写，装完直接重启。
+			log.Printf("定时升级：%s 已就位，重启", tag)
+			if err := s.Restart(); err != nil {
+				log.Printf("定时升级：重启失败: %v", err)
 			}
 		}
 	}

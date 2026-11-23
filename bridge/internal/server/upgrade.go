@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -94,14 +95,33 @@ func (s *Server) handleUpgradeApply(w http.ResponseWriter, r *http.Request) {
 	// 否则会留下一个"下载了一半"的临时文件。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if err := s.up.Apply(ctx); err != nil {
+
+	tag, err := s.up.Apply(ctx)
+	if err != nil {
 		s.flashTo(w, "err", "升级失败："+err.Error())
 		http.Redirect(w, r, "/upgrade", http.StatusSeeOther)
 		return
 	}
-	// 正常情况下 Apply 成功就已经 exec 了，走不到这里。
-	s.flashTo(w, "ok", "升级完成，正在重启")
+
+	// 顺序很关键：先把响应完整写给浏览器，再 exec 重启。
+	//
+	// exec 会替换进程映像，它之后的代码永远不会执行。如果在写响应前 exec，
+	// 浏览器拿到的是一个被中断的连接，会**自动重发这个 POST**；新进程看到
+	// 版本已经是最新，于是返回"当前版本已不低于最新版本"——升级明明成功了，
+	// 页面上却显示失败。这正是之前两次升级都出现误报的原因。
+	s.flashTo(w, "ok", "已升级到 "+tag+"，正在重启")
 	http.Redirect(w, r, "/upgrade", http.StatusSeeOther)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	// 给浏览器和代理一点时间把响应收完，再换进程。
+	// 重启是异步的：即便这里失败，新二进制已经在盘上，下次重启就会生效。
+	time.AfterFunc(500*time.Millisecond, func() {
+		if err := s.up.Restart(); err != nil {
+			log.Printf("升级后重启失败（新版本已就位，下次重启生效）: %v", err)
+		}
+	})
 }
 
 // handleUpgradeConfig 保存定时升级设置。
