@@ -695,47 +695,41 @@ func (s *Server) renderBridge(w http.ResponseWriter, r *http.Request, b *store.B
 
 // onboardPrompt 生成"发给 Muse"的接入说明。
 //
-// 里面只放地址、桥标识和调用节奏，不放令牌：这份文本是要被整段复制到别处的，
+// 里面只放地址、桥标识和接口用法，不放令牌：这份文本是要被整段复制到别处的，
 // 任何凭据都不该跟着走。文案是用户定稿的，要改先对齐，别自行增删。
 //
 // slug 会写进去，它只是公开的桥标识（详情页标题旁就印着），只能用来查一个
 // 待处理数字，不能读消息、不能发消息，所以不算凭据。
+//
+// 刻意不提 Telegram：Muse 面对的就是"一座桥"，另一端是哪个 IM 与它无关，
+// 知道了只会引诱它绕过桥去直连。同理不提"别的 agent"——一座桥只对应一个
+// agent，多 agent 抢同一批消息的前提在这里不成立。
 func onboardPrompt(base, slug string) string {
 	hook := "/pending-count?bridge=" + slug
 	return strings.NewReplacer("{base}", base, "{slug}", slug, "{hook}", hook).Replace(`桥地址：{base}
 桥标识：{slug}
 
-这是一座 Muse Bridge：Telegram Bot 的消息队列。用户在 Telegram 里给机器人发消息，消息会进这座桥的队列；你认领、回复，桥负责把回复发回 Telegram。
+这是一个桥，用户发送的消息在桥暂存，你认领、回复，桥负责把回复发回用户。
 
 接入步骤：
 1. 注册 connector：api_key，bearer_header，api_hosts 用上面的桥地址；
-2. 令牌我另外单独发给你 —— 通过 Muse 的安全录入页面提交，不要让我粘贴在聊天里。收到后按 bearer_header 方式带上，不要写进文档、脚本、命令行参数或日志；
-3. 不要向我要机器人 token —— 它在桥里，Muse 不需要也不该拿到；也不要自己调 Telegram Bot API 发消息，一切发送都走桥的 reply；
-4. 写一个 helper（命名为 muse-bridge.py），实现下面的接口；写好后先跑一次 stats 确认连通，再开始收消息。如果超时，重试一次再判断。
+2. 令牌我另外单独发给你 —— 通过 Muse 的安全录入页面提交，不要让我粘贴在聊天里。收到后按 bearer_header 方式带上。
+3. 写一个 helper（命名为 muse-bridge.py），实现下面的接口；写好后先跑一次 stats 确认连通，再开始收消息。如果超时，重试一次再判断。
 
 接口（除 pending-count 外都要带 Bearer 令牌；任务 id 的字段名就是 id，返回都是 JSON，成功时 ok 为 true）：
-- GET {hook}（公开，不用令牌）→ {"ok":true,"pending":N}，N 是这座桥的待处理消息数；
-- GET /poll?limit=5&lease_seconds=180 → 认领待处理消息，返回 {"ok":true,"lease_id":"...","messages":[...]}。每条消息有 id、lease_id，以及消息文本、发送者、chat_id 等字段；lease_seconds 要够覆盖你的思考时间，默认 180 秒；
-- POST /reply {"id":1,"lease_id":"...","text":"...","mode":"final"} → 发出回复。mode 只能是 draft 或 final，省略按 final 处理：draft 先发一条占位消息、后续调用编辑同一条，适合边想边发；final 是定稿。桥会自动分段、退避重试并 ack，发完不用再调 ack；
-- POST /ack {"ids":[1],"lease_id":"..."} → 不回复，直接完成（确实不需要回复的消息用它）；
+- GET {hook} → {"ok":true,"pending":N}，N 是这座桥的待处理消息数；
+- GET /poll?limit=5&lease_seconds=180 → 认领待处理消息，返回 {"ok":true,"lease_id":"...","messages":[...]}。每条消息有 id、lease_id，以及消息文本、发送者、chat_id 等字段；返回空数组表示当前没有可认领的消息，直接结束这一轮；lease_seconds 要够覆盖你的思考时间，默认 180 秒，范围 30–900；
+- POST /reply {"id":1,"lease_id":"...","text":"...","mode":"final"} → 发出回复。mode 只能是 draft 或 final，省略按 final 处理：draft 先占位、后续编辑同一条，适合边想边发；final 是定稿。桥会自动分段、退避重试并 ack，发完不用再调 ack；
+- POST /ack {"ids":[1],"lease_id":"..."} → 不回复，直接完成；
 - POST /fail {"id":1,"lease_id":"...","error":"..."} → 没能完成，让桥稍后重投；超过上限进死信，后台可重放；
-- POST /extend {"id":1,"lease_id":"...","lease_seconds":180} → 续租；
-- GET /stats → 队列状态（各状态计数和最近的死信）。
+- POST /extend {"id":1,"lease_id":"...","lease_seconds":180} → 续租，lease_seconds 同样 30–900。处理时间可能超过租约时先续租，否则过期会被重新投递，导致重复回复；
+- GET /stats → 队列状态。
 
 Hook：
-- 建一个名为 muse-bridge-pending 的 hook，每 5 秒请求一次 GET {hook}。这个端点是公开的，不用令牌；bridge 参数是**必填**的 —— 不带参数会直接返回 400 错误，不会给你任何数字；
+- 建一个名为 muse-bridge-pending 的 hook，每 5 秒请求一次 GET {hook}。
 - pending 为 0 就安静退出，不要产生任何输出；大于 0 就唤醒你，走一遍 poll → reply；
 - 同一批待处理不要反复唤醒自己：上一次唤醒后 90 秒内、且数量没有增加，继续等下一轮；
-- 唤醒只是提示「有活」，具体有哪些消息仍然要靠 poll 认领，不要拿 pending 的数字当消息内容。
-
-每条消息的节奏：
-- pending-count 为 0 就结束这一轮，不要回复任何东西。这个端点是公开的，适合高频轮询；
-- 有消息就 poll 认领；poll 返回空说明已被别的 agent 认领或队列已空，直接结束；
-- 想好后用 reply 发出；
-- 长任务在租约过半时 extend 续租。
-
-「正在输入…」由桥负责：消息被认领的那一刻起就持续给 Telegram 发 typing，
-直到 reply / ack / fail 或租约到期。你不需要发 sendChatAction。`)
+- 唤醒只是提示「有活」，具体有哪些消息仍然要靠 poll 认领，不要拿 pending 的数字当消息内容。`)
 }
 
 func (s *Server) handleBridgeSettings(w http.ResponseWriter, r *http.Request) {

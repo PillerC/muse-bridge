@@ -1067,6 +1067,23 @@ func TestOnboardPromptHasURLAndNoToken(t *testing.T) {
 	if strings.Contains(prompt, "mb_test_token") {
 		t.Fatal("提示词里不能出现令牌：它会被整段转发出去")
 	}
+	// 桥的另一端是哪个 IM 与 Muse 无关，说了只会引诱它绕过桥去直连。
+	for _, forbidden := range []string{"Telegram", "机器人"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("提示词不该提 %q：Muse 面对的就是一座桥，不需要知道对面是什么", forbidden)
+		}
+	}
+	// 一座桥只对应一个 agent，不存在多个 agent 抢同一批消息的前提。
+	for _, forbidden := range []string{"别的 agent", "其他 agent", "其它 agent"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("提示词不该提 %q：一座桥只对应一个 agent", forbidden)
+		}
+	}
+	// 租约上下限由 Queue.Claim / Queue.Extend 夹到 30–900 秒，写清楚免得
+	// agent 以为传更大值就能延长租约。
+	if !strings.Contains(prompt, "30–900") {
+		t.Fatal("提示词应写明 lease_seconds 的范围 30–900")
+	}
 	if !strings.Contains(w.Body.String(), `data-copy="prompt"`) {
 		t.Fatal("缺复制提示词的按钮")
 	}
