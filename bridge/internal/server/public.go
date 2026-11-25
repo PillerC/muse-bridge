@@ -51,6 +51,9 @@ func (s *Server) registerPublic(mux *http.ServeMux) {
 	// v2 新增：回复经桥转发，既拿到完整出站记录，也让 Muse 永远看不到 bot token。
 	mux.HandleFunc("POST /reply", s.withBridge(s.handleReply))
 
+	// 主动推送：不依赖入站任务，直接发到某个会话。见 handlePush。
+	mux.HandleFunc("POST /push", s.withBridge(s.handlePush))
+
 	// Telegram webhook：URL 里带 slug，secret 走请求头。
 	mux.HandleFunc("POST /tg/{slug}", s.handleWebhook)
 }
@@ -360,6 +363,42 @@ func (s *Server) handleReply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "tg_message_id": res.TgMessageID, "parts": res.Parts,
 		"draft": res.Draft, "sent_ids": res.SentIDs,
+	})
+}
+
+// handlePush 主动推送一条消息，不依赖入站任务。
+//
+// 请求体 {chat_id, text, parse_mode}。chat_id 可省略（0）：
+// 省略时发到这座桥最近活跃的会话；这座桥还没有会话时返回 404。
+// 带 chat_id 时会话必须已存在于这座桥下，同样不存在返回 404。
+// 分段、429 退避、解析失败回退纯文本和出站落库都在 domain 层完成。
+func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
+	b := bridgeFrom(r.Context())
+	var body struct {
+		ChatID    int64  `json:"chat_id"`
+		Text      string `json:"text"`
+		ParseMode string `json:"parse_mode"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求体必须是 {chat_id, text, parse_mode}")
+		return
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		writeErr(w, http.StatusBadRequest, "text 不能为空")
+		return
+	}
+	res, err := s.svc.SendPush(r.Context(), b, body.ChatID, body.Text, body.ParseMode)
+	if isNotFound(err) {
+		writeErr(w, http.StatusNotFound, "会话不存在：先让用户给机器人发一条消息，或带上已存在的 chat_id")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "chat_id": res.ChatID, "tg_message_id": res.TgMessageID,
+		"parts": res.Parts, "sent_ids": res.SentIDs,
 	})
 }
 

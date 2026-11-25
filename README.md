@@ -184,6 +184,7 @@ Muse 用 `Authorization: Bearer <桥令牌>` 调用。
 | POST | `/extend` | `{id, lease_id, lease_seconds}` 续租 |
 | GET | `/stats` | 状态分布 + 最近死信 |
 | POST | `/reply` | `{id, lease_id, text, mode:draft\|final, parse_mode}`，默认自动 ack |
+| POST | `/push` | `{chat_id, text, parse_mode}` 主动推送，不依赖入站任务；`chat_id` 可省略，省略时发到最近活跃的会话 |
 
 `/poll` 返回的每条消息都带自己的 `lease_id`，避免两批消息混在一起时 ack 用错租约。
 
@@ -199,6 +200,11 @@ agent 都会被叫醒，醒来 `poll` 却只领得到自己那座桥的消息，
 `/reply` 的任务 id 字段是 `id`；`mode` 只能是 `draft` 或 `final`，省略按 `final` 处理
 （`draft` 建占位消息、后续调用编辑同一条，`final` 定稿并自动 ack）。字段名写错会被拒（400），
 不会静默当成别的字段。
+
+`/push` 是主动推送的唯一入口：不认领任务、没有租约，直接把文本发到某个会话，
+分段、429 退避、解析失败回退纯文本和出站落库与 `/reply` 共用同一套逻辑。
+`chat_id` 省略时发到这座桥最近活跃的会话；带 `chat_id` 时会话必须已存在于这座桥下，
+不存在（或这座桥还没有任何会话）返回 404。先让用户给机器人发一条消息建好会话，再推。
 
 ## 管理后台
 

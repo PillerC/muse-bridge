@@ -157,6 +157,7 @@ type ReplyResult struct {
 	Parts       int     `json:"parts"`
 	Draft       bool    `json:"draft"`
 	SentIDs     []int64 `json:"sent_ids"`
+	ChatID      int64   `json:"chat_id"`
 }
 
 // SendReply 把一段文本发回 Telegram。
@@ -202,7 +203,7 @@ func (s *Service) SendReply(ctx context.Context, b *store.Bridge, jobID int64, l
 
 	limit := 3800
 	parts := splitText(text, limit)
-	res := &ReplyResult{Parts: len(parts), Draft: mode == "draft"}
+	res := &ReplyResult{Parts: len(parts), Draft: mode == "draft", ChatID: job.ChatID}
 
 	send := func(body string, replyTo int64) (int64, error) {
 		sent, err := callWithRetry(ctx, func() (*tg.SentMessage, error) {
@@ -274,6 +275,69 @@ func (s *Service) SendReply(ctx context.Context, b *store.Bridge, jobID int64, l
 		if err := s.Queue.Ack(ctx, job.JobID, leaseID, s.Now()); err != nil {
 			return res, err
 		}
+	}
+	return res, nil
+}
+
+// SendPush 主动把一段文本发到某个会话，不依赖任何入站任务。
+//
+// 与 SendReply 的区别：没有 job、没有租约、没有 draft 编辑，
+// 只有分段发送、429 退避、解析失败回退纯文本和出站落库。
+// chatID 为 0 时发到这座桥最近活跃的会话；这座桥还没有任何会话时
+// 返回 ErrNotFound，调用方应先让用户给机器人发一条消息，或显式带 chat_id。
+// 带 chat_id 时会话必须已存在于这座桥下，避免凭空给陌生 chat 发消息。
+func (s *Service) SendPush(ctx context.Context, b *store.Bridge, chatID int64, text, parseMode string) (*ReplyResult, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("text 不能为空")
+	}
+	var conv *store.Conversation
+	var err error
+	if chatID != 0 {
+		conv, err = s.Store.ConversationByChat(ctx, b.ID, chatID)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		convs, err := s.Store.ListConversations(ctx, b.ID, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(convs) == 0 {
+			return nil, store.ErrNotFound
+		}
+		conv = convs[0]
+		chatID = conv.ChatID
+	}
+	if parseMode == "Markdown" {
+		text = normalizeLegacyMarkdown(text)
+	}
+	client, err := s.Client(ctx, b)
+	if err != nil {
+		return nil, err
+	}
+	parts := splitText(text, 3800)
+	res := &ReplyResult{Parts: len(parts), ChatID: chatID}
+	var partsJSON []map[string]any
+	for i, body := range parts {
+		sent, err := callWithRetry(ctx, func() (*tg.SentMessage, error) {
+			return client.SendMessage(ctx, chatID, body, 0, parseMode)
+		})
+		if err != nil && parseMode != "" && isParseError(err) {
+			sent, err = client.SendMessage(ctx, chatID, body, 0, "")
+		}
+		if err != nil {
+			return nil, err
+		}
+		if i == 0 {
+			res.TgMessageID = sent.MessageID
+		}
+		res.SentIDs = append(res.SentIDs, sent.MessageID)
+		partsJSON = append(partsJSON, map[string]any{"index": i, "message_id": sent.MessageID, "text": body})
+	}
+	blob, _ := json.Marshal(partsJSON)
+	if _, err := s.Store.InsertOutbound(ctx, b.ID, conv.ID, res.TgMessageID,
+		0, text, "text", string(blob), "", s.Now()); err != nil {
+		return nil, err
 	}
 	return res, nil
 }

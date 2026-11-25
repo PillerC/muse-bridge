@@ -1469,3 +1469,85 @@ func TestFirstRunSetupFlow(t *testing.T) {
 		t.Fatal("错误密码不该登录成功")
 	}
 }
+
+func TestPushFlow(t *testing.T) {
+	f := newFixture(t)
+
+	// 还没有任何会话时，省略 chat_id 应 404，而不是凭空发。
+	w := f.do(t, "POST", "/push", `{"text":"还没会话"}`, f.auth())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("无会话时 push 应 404，实际 %d: %s", w.Code, w.Body)
+	}
+	if len(f.tg.sent) != 0 {
+		t.Fatalf("无会话时不应发出消息，实际 %v", f.tg.sent)
+	}
+
+	// 先让用户发一条消息建好会话（chat 999）。
+	if w := f.do(t, "POST", "/tg/demo", sampleUpdate,
+		map[string]string{"X-Telegram-Bot-Api-Secret-Token": "hook-secret"}); w.Code != 200 {
+		t.Fatalf("webhook 失败: %d %s", w.Code, w.Body)
+	}
+
+	// 省略 chat_id：发到最近活跃的会话。
+	w = f.do(t, "POST", "/push", `{"text":"主动推送测试"}`, f.auth())
+	if w.Code != 200 {
+		t.Fatalf("push 返回 %d: %s", w.Code, w.Body)
+	}
+	var res struct {
+		OK     bool  `json:"ok"`
+		ChatID int64 `json:"chat_id"`
+		Parts  int   `json:"parts"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &res)
+	if !res.OK || res.ChatID != 999 || res.Parts != 1 {
+		t.Fatalf("push 结果不对: %s", w.Body)
+	}
+	if len(f.tg.sent) != 1 || f.tg.sent[0] != "主动推送测试" {
+		t.Fatalf("Telegram 应收到推送，实际 %v", f.tg.sent)
+	}
+
+	// 显式带 chat_id 也应能发。
+	w = f.do(t, "POST", "/push", `{"chat_id":999,"text":"第二条推送"}`, f.auth())
+	if w.Code != 200 {
+		t.Fatalf("带 chat_id 的 push 返回 %d: %s", w.Code, w.Body)
+	}
+	if len(f.tg.sent) != 2 || f.tg.sent[1] != "第二条推送" {
+		t.Fatalf("第二条推送未送达，实际 %v", f.tg.sent)
+	}
+
+	// 不存在的 chat_id：404 且不发送。
+	w = f.do(t, "POST", "/push", `{"chat_id":12345,"text":"不该发出"}`, f.auth())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("未知 chat_id 应 404，实际 %d: %s", w.Code, w.Body)
+	}
+	if len(f.tg.sent) != 2 {
+		t.Fatalf("未知 chat_id 不应发出消息，实际 %v", f.tg.sent)
+	}
+
+	// 空 text：400。
+	w = f.do(t, "POST", "/push", `{"text":"  "}`, f.auth())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("空 text 应 400，实际 %d: %s", w.Code, w.Body)
+	}
+
+	// 无令牌：401。
+	w = f.do(t, "POST", "/push", `{"text":"没令牌"}`, nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("无令牌 push 应 401，实际 %d", w.Code)
+	}
+
+	// 两条推送都应落成出站记录。
+	items, err := f.st.ExportMessages(t.Context(), f.bridge.ID, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, it := range items {
+		if it.Direction == "out" {
+			out = append(out, it.Text)
+		}
+	}
+	if len(out) != 2 || out[0] != "主动推送测试" || out[1] != "第二条推送" {
+		t.Fatalf("出站记录不对: %v", out)
+	}
+}

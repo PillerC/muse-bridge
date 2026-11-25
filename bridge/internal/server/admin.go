@@ -720,6 +720,7 @@ func onboardPrompt(base, slug string) string {
 - GET {hook} → {"ok":true,"pending":N}，N 是这座桥的待处理消息数；
 - GET /poll?limit=5&lease_seconds=180 → 认领待处理消息，返回 {"ok":true,"lease_id":"...","messages":[...]}。每条消息有 id、lease_id，以及消息文本、发送者、chat_id 等字段；返回空数组表示当前没有可认领的消息，直接结束这一轮；lease_seconds 要够覆盖你的思考时间，默认 180 秒，范围 30–900；
 - POST /reply {"id":1,"lease_id":"...","text":"...","mode":"final"} → 发出回复。mode 只能是 draft 或 final，省略按 final 处理：draft 先占位、后续编辑同一条，适合边想边发；final 是定稿。桥会自动分段、退避重试并 ack，发完不用再调 ack；
+- POST /push {"text":"..."} → 主动推送一条消息，不需要先认领；chat_id 可省略，省略时发到最近活跃的会话，带 chat_id 时会话必须已存在；
 - POST /ack {"ids":[1],"lease_id":"..."} → 不回复，直接完成；
 - POST /fail {"id":1,"lease_id":"...","error":"..."} → 没能完成，让桥稍后重投；超过上限进死信，后台可重放；
 - POST /extend {"id":1,"lease_id":"...","lease_seconds":180} → 续租，lease_seconds 同样 30–900。处理时间可能超过租约时先续租，否则过期会被重新投递，导致重复回复；
